@@ -21,34 +21,64 @@ data class Verdict(
  * The probe rides the local mixed inbound (127.0.0.1:2080) — if the core is
  * up but the tunnel is dead, the request times out and the profile FAILS.
  *
- *  1. probe     : GET http://connectivitycheck.gstatic.com/generate_204 (expects 204)
- *  2. exit info : GET https://1.1.1.1/cdn-cgi/trace -> "ip=…" (exit IP for the UI)
+ * IMPORTANT (bug history): the probe used to be
+ * `http://connectivitycheck.gstatic.com/generate_204` — plain HTTP. Android 9+
+ * forbids cleartext by default (network security policy), so OkHttp refused
+ * the request LOCALLY before any byte left the app and every candidate failed
+ * with "CLEARTEXT communication not permitted", even on a healthy tunnel.
+ * All probes are HTTPS now (verified live: gstatic answers 204, the trace
+ * answers 200 with ip=…).
+ *
+ *  1. probe     : GET https://connectivitycheck.gstatic.com/generate_204 (expects 204)
+ *                 fallback GET https://www.cloudflare.com/cdn-cgi/trace
+ *                 (expects 200 + "ip=" line — also yields the exit IP directly)
+ *  2. exit info : GET https://1.1.1.1/cdn-cgi/trace -> "ip=…" (after a 204 probe)
  */
 object ConnectionVerifier {
 
+    private data class Probe(val url: String, val expect204: Boolean)
+
+    private val PROBES = listOf(
+        Probe("https://connectivitycheck.gstatic.com/generate_204", expect204 = true),
+        Probe("https://www.cloudflare.com/cdn-cgi/trace", expect204 = false),
+    )
+
     private val probeClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(6, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
         .build()
 
-    fun verify(tries: Int = 3): Verdict {
+    fun verify(tries: Int = 2): Verdict {
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT))
         var lastReason = "unknown"
         repeat(tries) { attempt ->
-            val started = System.currentTimeMillis()
-            runCatching {
-                probeClient.newBuilder().proxy(proxy).build().newCall(
-                    Request.Builder().url("http://connectivitycheck.gstatic.com/generate_204").build()
-                ).execute().use { resp ->
-                    if (resp.code == 204) {
-                        val latency = System.currentTimeMillis() - started
-                        val exitIp = fetchExitIp(proxy)
-                        return Verdict(true, exitIp, latency)
+            for (probe in PROBES) {
+                val started = System.currentTimeMillis()
+                try {
+                    probeClient.newBuilder().proxy(proxy).build().newCall(
+                        Request.Builder().url(probe.url).build()
+                    ).execute().use { resp ->
+                        if (probe.expect204 && resp.code == 204) {
+                            val latency = System.currentTimeMillis() - started
+                            return Verdict(true, fetchExitIp(proxy), latency)
+                        }
+                        if (!probe.expect204 && resp.code == 200) {
+                            val text = resp.body?.string() ?: ""
+                            val ip = text.lineSequence()
+                                .firstOrNull { it.startsWith("ip=") }
+                                ?.removePrefix("ip=") ?: ""
+                            if (ip.isNotBlank()) {
+                                val latency = System.currentTimeMillis() - started
+                                return Verdict(true, ip, latency)
+                            }
+                        }
+                        lastReason = "probe ${resp.code} ${probe.url.removePrefix("https://").substringBefore('/')} (attempt ${attempt + 1})"
                     }
-                    lastReason = "probe HTTP ${resp.code} (attempt ${attempt + 1})"
+                } catch (e: Exception) {
+                    lastReason = "${e.message ?: "probe failed"} (attempt ${attempt + 1})"
                 }
-            }.onFailure { lastReason = "${it.message ?: "probe failed"} (attempt ${attempt + 1})" }
+            }
         }
         return Verdict(false, reason = lastReason)
     }
