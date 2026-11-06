@@ -88,6 +88,10 @@ jobs:
     name: build APK
     needs: libbox
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write      # required by attest-build-provenance (Sigstore OIDC)
+      attestations: write  # to store the generated attestation
     steps:
       - name: checkout kuku-vpn
         uses: actions/checkout@v4
