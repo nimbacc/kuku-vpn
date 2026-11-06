@@ -23,6 +23,8 @@ private object ProfileKeys {
     val SELECTED = stringPreferencesKey("selected_id")
     val LAST_GOOD = stringPreferencesKey("last_good_id")
     val SUBSCRIPTIONS = stringSetPreferencesKey("subscription_urls")
+    // "1" once the user deleted the auto-created free WARP profile — never re-create it
+    val WARP_DELETED = stringPreferencesKey("warp_deleted")
 }
 
 class ProfileStore(private val context: Context) {
@@ -36,6 +38,10 @@ class ProfileStore(private val context: Context) {
     val subscriptions: Flow<Set<String>> = context.profileDataStore.data.map { it[ProfileKeys.SUBSCRIPTIONS] ?: emptySet() }
 
     suspend fun snapshot(): List<Profile> = profiles.first()
+
+    /** True when the user deleted the auto-created free WARP profile on purpose. */
+    suspend fun isWarpDeleted(): Boolean =
+        context.profileDataStore.data.map { it[ProfileKeys.WARP_DELETED] == "1" }.first()
 
     suspend fun addAll(newOnes: List<Profile>) {
         if (newOnes.isEmpty()) return
@@ -56,8 +62,12 @@ class ProfileStore(private val context: Context) {
             val list = prefs[ProfileKeys.LIST]?.let {
                 runCatching { json.decodeFromString<List<Profile>>(it) }.getOrNull()
             } ?: emptyList()
+            val removed = list.filter { it.id == id }
             val rest = list.filterNot { it.id == id }
             prefs[ProfileKeys.LIST] = json.encodeToString(rest)
+            // deleting the auto-created free WARP profile opts out of re-creating it
+            // ("warp" literal = WarpRegistrar.WARP_SOURCE, kept literal to avoid a core→data cycle)
+            if (removed.any { it.fromSubscription == "warp" }) prefs[ProfileKeys.WARP_DELETED] = "1"
             if (prefs[ProfileKeys.SELECTED] == id) {
                 val next = rest.firstOrNull()?.id
                 if (next == null) prefs.remove(ProfileKeys.SELECTED) else prefs[ProfileKeys.SELECTED] = next

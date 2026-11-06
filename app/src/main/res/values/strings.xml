@@ -29,6 +29,10 @@
     <string name="stats_exit">Exit IP</string>
     <string name="verify_note">"Connected" is shown only after a real request has passed through the tunnel and come back.</string>
 
+    <!-- Free WARP (auto-setup) -->
+    <string name="warp_profile_name">Cloudflare WARP (Free)</string>
+    <string name="warp_setting_up">Preparing your free connection (Cloudflare WARP)…</string>
+
     <!-- Profiles -->
     <string name="tab_profiles">Profiles</string>
     <string name="tab_home">Home</string>

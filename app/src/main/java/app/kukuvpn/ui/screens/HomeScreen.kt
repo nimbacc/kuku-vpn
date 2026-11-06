@@ -38,6 +38,8 @@ import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
 import app.kukuvpn.bg.TunnelStage
 import app.kukuvpn.bg.TunnelState
+import app.kukuvpn.core.warp.WarpRegistrar
+import app.kukuvpn.core.warp.WarpSetup
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.ui.components.StatTile
 import app.kukuvpn.ui.components.StageBar
@@ -64,6 +66,7 @@ fun HomeScreen() {
     val settings by app.settingsStore.settings.collectAsState(initial = AppSettings())
     val profiles by app.profileStore.profiles.collectAsState(initial = emptyList())
     val selectedId by app.profileStore.selectedId.collectAsState(initial = null)
+    val warpStatus by WarpRegistrar.status.collectAsState()
 
     // 1 Hz samples for the sparkline, kept on their own stream so the chart
     // never rebuilds the whole screen (the v1.0.7 lesson, RIX-side).
@@ -187,8 +190,12 @@ fun HomeScreen() {
         if (profiles.isEmpty()) {
             Card {
                 Column(Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.no_profile_title), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.no_profile_body), style = MaterialTheme.typography.bodySmall)
+                    if (warpStatus == WarpSetup.REGISTERING) {
+                        Text(stringResource(R.string.warp_setting_up), style = MaterialTheme.typography.titleMedium)
+                    } else {
+                        Text(stringResource(R.string.no_profile_title), style = MaterialTheme.typography.titleMedium)
+                        Text(stringResource(R.string.no_profile_body), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

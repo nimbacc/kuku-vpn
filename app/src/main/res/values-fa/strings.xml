@@ -27,6 +27,10 @@
     <string name="stats_exit">IP خروجی</string>
     <string name="verify_note">«متصل» فقط وقتی نمایش داده می‌شود که یک درخواست واقعی از تونل عبور کرده و پاسخ برگشته باشد.</string>
 
+    <!-- Free WARP (auto-setup) -->
+    <string name="warp_profile_name">کلادفلر WARP (رایگان)</string>
+    <string name="warp_setting_up">در حال آماده‌سازی اتصال رایگان (کلادفلر WARP)…</string>
+
     <!-- Profiles -->
     <string name="tab_profiles">پروفایل‌ها</string>
     <string name="tab_home">خانه</string>
