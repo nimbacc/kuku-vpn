@@ -21,15 +21,21 @@ android {
     signingConfigs {
         // Release signing material comes ONLY from keystore.properties which CI
         // (or a local machine) creates from secrets — never from the repo.
+        // Parsed manually with pure Kotlin: in Gradle kts scripts the identifier
+        // `java` is shadowed by the java-plugin accessor, so java.util.Properties
+        // does not compile here.
         if (file("keystore.properties").exists()) {
-            val ksProps = java.util.Properties().apply {
-                load(file("keystore.properties").inputStream())
-            }
+            val ksProps = file("keystore.properties").readLines()
+                .mapNotNull { line ->
+                    val i = line.indexOf('=')
+                    if (i > 0) line.substring(0, i).trim() to line.substring(i + 1).trim() else null
+                }
+                .toMap()
             create("release") {
-                storeFile = file(ksProps.getProperty("storeFile"))
-                storePassword = ksProps.getProperty("storePassword")
-                keyAlias = ksProps.getProperty("keyAlias")
-                keyPassword = ksProps.getProperty("keyPassword")
+                storeFile = file(ksProps.getValue("storeFile"))
+                storePassword = ksProps.getValue("storePassword")
+                keyAlias = ksProps.getValue("keyAlias")
+                keyPassword = ksProps.getValue("keyPassword")
             }
         }
     }
