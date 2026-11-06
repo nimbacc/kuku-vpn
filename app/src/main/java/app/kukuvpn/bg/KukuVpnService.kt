@@ -23,6 +23,7 @@ import app.kukuvpn.R
 import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.core.fallback.FallbackEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
+import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileStore
@@ -77,6 +78,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         private const val CORE_NOTIF_CHANNEL = "core"
         private const val NOTIF_ID = 100
         private const val MAX_CANDIDATES = 4
+
+        /**
+         * Cloudflare WARP anycast IPs. ISPs in Iran filter them selectively
+         * (162.159.x is the classic engage range, 188.114.x is the alternate
+         * range many Iranian users still reach), so every WARP candidate is
+         * swept across all of them before the next port variant is tried.
+         * Verified live with sing-box 1.11.15: all four establish tunnels.
+         */
+        private val WARP_ENDPOINT_IPS = listOf(
+            "162.159.192.1", "162.159.193.10", "188.114.97.1", "188.114.96.1",
+        )
 
         @Volatile private var libboxReady = false
     }
@@ -171,36 +183,56 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             ServiceBridge.activeProfile.value = candidate
             ServiceBridge.log("INFO", "trying profile: ${candidate.name} (${candidate.summary()})")
             ServiceBridge.state.value = TunnelState.CONNECTING
-            try {
-                startCore(candidate)
-                ServiceBridge.lit(TunnelStage.CORE)
 
-                waitListener()
-                ServiceBridge.lit(TunnelStage.LISTENER)
+            // WARP candidates sweep every known anycast IP — the identity is
+            // identical, only the UDP endpoint changes, so no re-registration.
+            val endpoints = if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE)
+                (listOf(candidate.host) + WARP_ENDPOINT_IPS).distinct()
+            else listOf(candidate.host)
 
-                ServiceBridge.state.value = TunnelState.VERIFYING
-                val verdict = ConnectionVerifier.verify()
-                if (!verdict.ok) error("verification failed: ${verdict.reason}")
+            var lastError: Exception? = null
+            for (ip in endpoints) {
+                if (stopping.get()) return
+                val attempt = if (ip == candidate.host) candidate else candidate.copy(host = ip)
+                ServiceBridge.log("INFO", "endpoint ${attempt.host}:${attempt.port}")
+                try {
+                    startCore(attempt)
+                    ServiceBridge.lit(TunnelStage.CORE)
 
-                ServiceBridge.lit(TunnelStage.TUNNEL)
-                ServiceBridge.lit(TunnelStage.EXIT)
-                ServiceBridge.exitIp.value = verdict.exitIp
-                ServiceBridge.state.value = TunnelState.ACTIVE
-                profileStore.select(candidate.id)
-                profileStore.setLastGood(candidate.id)
-                ServiceBridge.startStatsClients()
-                startNotif(
-                    getString(R.string.notif_active) +
-                        (verdict.exitIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
-                    ongoing = true,
-                )
-                ServiceBridge.log("INFO", "tunnel verified, exit=${verdict.exitIp.ifBlank { "?" }} latency=${verdict.latencyMs}ms")
-                return
-            } catch (e: Exception) {
-                lastCandidateError = e.message
-                ServiceBridge.log("ERROR", "${candidate.name}: ${e.message}")
-                stopCore()
+                    waitListener()
+                    ServiceBridge.lit(TunnelStage.LISTENER)
+
+                    ServiceBridge.state.value = TunnelState.VERIFYING
+                    // tries=1 → fast sweep (each probe still hits 2 HTTPS URLs);
+                    // a false negative just moves on to the next endpoint.
+                    val verdict = ConnectionVerifier.verify(tries = 1)
+                    if (!verdict.ok) error("verification failed: ${verdict.reason}")
+
+                    ServiceBridge.lit(TunnelStage.TUNNEL)
+                    ServiceBridge.lit(TunnelStage.EXIT)
+                    ServiceBridge.exitIp.value = verdict.exitIp
+                    ServiceBridge.state.value = TunnelState.ACTIVE
+                    profileStore.select(candidate.id)
+                    profileStore.setLastGood(candidate.id)
+                    ServiceBridge.startStatsClients()
+                    startNotif(
+                        getString(R.string.notif_active) +
+                            (verdict.exitIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                        ongoing = true,
+                    )
+                    ServiceBridge.log(
+                        "INFO",
+                        "tunnel verified via ${attempt.host}:${attempt.port}, " +
+                            "exit=${verdict.exitIp.ifBlank { "?" }} latency=${verdict.latencyMs}ms"
+                    )
+                    return
+                } catch (e: Exception) {
+                    lastError = e
+                    ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
+                    stopCore()
+                }
             }
+            lastCandidateError = lastError?.message
         }
 
         // surface the real cause on the Home card, not just the count
