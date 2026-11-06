@@ -1,15 +1,21 @@
 package app.kukuvpn.bg
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService as AndroidVpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
+import android.system.OsConstants
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import app.kukuvpn.MainActivity
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
@@ -20,52 +26,61 @@ import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileStore
 import app.kukuvpn.data.SettingsStore
-import io.nekohasekai.libbox.BoxOptions
+import go.Seq
 import io.nekohasekai.libbox.BoxService
 import io.nekohasekai.libbox.CommandServer
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.LogMessage
-import io.nekohasekai.libbox.StatusMessage
-import io.nekohasekai.libbox.StringIterator
-import io.nekohasekai.libbox.TunOptions
-import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.CommandServerHandler
-import io.nekohasekai.libbox.ConnectionOwner
 import io.nekohasekai.libbox.InterfaceUpdateListener
+import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.NetworkInterfaceIterator
+import io.nekohasekai.libbox.PlatformInterface
+import io.nekohasekai.libbox.SetupOptions
+import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
+import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.first
+import java.io.File
+import java.net.Inet6Address
+import java.net.InetSocketAddress
+import java.net.InterfaceAddress
+import java.net.NetworkInterface as JNetworkInterface
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The whole engine: runs libbox (sing-box) with an Android VPN interface,
+ * The whole engine: runs libbox (sing-box 1.11.x) with an Android VPN interface,
  * verifies the tunnel with a real request, and applies RIX-style fallback.
  *
- * libbox API reference: sing-box 1.11.x, pkg io.nekohasekai.libbox (gomobile).
- * If a future libbox bump changes interface members, the Gradle error lists
- * them — see docs/BUILD-TROUBLESHOOTING.md for the 2-minute fix.
+ * Signatures follow the REAL generated AAR (javap of libbox.aar from CI):
+ *  - core service is created with Libbox.newService(configJson, platformInterface)
+ *  - command server is CommandServer(handler, maxLines)
+ *  - PlatformInterface has 15 members incl. writeLog/sendNotification
+ *  - CommandServerHandler has exactly 4 members (serviceReload, postServiceClose,
+ *    getSystemProxyStatus, setSystemProxyEnabled) — UI-side callbacks live in
+ *    CommandClientHandler (see ServiceBridge).
  */
-class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHandler {
+class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
     companion object {
         const val ACTION_START = "app.kukuvpn.action.START"
         const val ACTION_STOP = "app.kukuvpn.action.STOP"
         private const val CHANNEL_ID = "tunnel"
+        private const val CORE_NOTIF_CHANNEL = "core"
         private const val NOTIF_ID = 100
         private const val MAX_CANDIDATES = 3
+
+        @Volatile private var libboxReady = false
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stopping = AtomicBoolean(false)
-    private val coreAlive = AtomicBoolean(false)
 
     private lateinit var profileStore: ProfileStore
     private lateinit var settingsStore: SettingsStore
@@ -74,6 +89,31 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
     private var commandServer: CommandServer? = null
     private var boxService: BoxService? = null
     private var tunPfd: ParcelFileDescriptor? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Core → app service callbacks. Only these four exist in libbox 1.11.x. */
+    private val serverHandler = object : CommandServerHandler {
+        override fun serviceReload() {
+            // the core asked for a reload (e.g. config touched) — restart the tunnel
+            scope.launch {
+                ServiceBridge.log("INFO", "core requested reload")
+                val last = ServiceBridge.activeProfile.value
+                if (last != null) {
+                    runCatching { stopCore() }
+                    runTunnelWith(last)
+                }
+            }
+        }
+
+        override fun postServiceClose() {
+            // not used on Android (same as the official client)
+        }
+
+        override fun getSystemProxyStatus(): SystemProxyStatus =
+            SystemProxyStatus().apply { available = false; enabled = false }
+
+        override fun setSystemProxyEnabled(enabled: Boolean) = Unit
+    }
 
     /* ----------------------------- lifecycle ------------------------------ */
 
@@ -97,11 +137,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
         super.onDestroy()
     }
 
+    override fun onRevoke() {
+        // VPN permission revoked or another VPN took over — tear everything down
+        scope.launch { stopTunnel(clean = true) }
+        super.onRevoke()
+    }
+
     /* ------------------------------ the engine ---------------------------- */
 
     private suspend fun runTunnel() {
         if (ServiceBridge.state.value !in setOf(TunnelState.OFF, TunnelState.ERROR)) {
-            if (ServiceBridge.isBusy) return // second tap while connecting = cancel (handled below)
+            if (ServiceBridge.isBusy) return // second tap while connecting = ignored
             return
         }
         stopping.set(false)
@@ -117,7 +163,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
             return
         }
 
-        val failed = mutableSetOf<String>()
         for (candidate in chain) {
             if (stopping.get()) return
             ServiceBridge.activeProfile.value = candidate
@@ -140,7 +185,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
                 ServiceBridge.state.value = TunnelState.ACTIVE
                 profileStore.select(candidate.id)
                 profileStore.setLastGood(candidate.id)
-                coreAlive.set(true)
+                ServiceBridge.startStatsClients()
                 startNotif(
                     getString(R.string.notif_active) +
                         (verdict.exitIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
@@ -150,13 +195,25 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
                 return
             } catch (e: Exception) {
                 ServiceBridge.log("ERROR", "${candidate.name}: ${e.message}")
-                failed += candidate.id
                 stopCore()
             }
         }
 
-        if (settings.autoFallback && chain.size > failed.size) return // unreachable, kept for clarity
         fail("all ${chain.size} candidate(s) failed")
+    }
+
+    /** Used by serviceReload() to bounce a single profile without the fallback chain. */
+    private suspend fun runTunnelWith(profile: Profile) {
+        ServiceBridge.state.value = TunnelState.CONNECTING
+        try {
+            startCore(profile)
+            waitListener()
+            ServiceBridge.state.value = TunnelState.ACTIVE
+        } catch (e: Exception) {
+            ServiceBridge.log("ERROR", "reload failed: ${e.message}")
+            stopCore()
+            fail(e.message ?: "reload failed")
+        }
     }
 
     private suspend fun buildChain(): List<Profile> {
@@ -168,21 +225,37 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
         }
     }
 
+    private fun ensureLibbox() {
+        if (libboxReady) return
+        val baseDir = filesDir
+        baseDir.mkdirs()
+        val workingDir = getExternalFilesDir(null) ?: filesDir
+        workingDir.mkdirs()
+        val tempDir = cacheDir
+        tempDir.mkdirs()
+        Libbox.setup(SetupOptions().also {
+            it.basePath = baseDir.absolutePath
+            it.workingPath = workingDir.absolutePath
+            it.tempPath = tempDir.absolutePath
+            it.fixAndroidStack = false
+        })
+        runCatching { Libbox.redirectStderr(File(workingDir, "stderr.log").absolutePath) }
+        libboxReady = true
+    }
+
     private suspend fun startCore(profile: Profile) {
         stopCore()
+        ensureLibbox()
         if (commandServer == null) {
-            commandServer = Libbox.newCommandServer(this, filesDir.absolutePath, 0)
-            commandServer?.start()
+            val server = CommandServer(serverHandler, 300)
+            server.start()
+            commandServer = server
         }
-        val config = SingBoxConfigBuilder.build(profile, settings)
-        val options = BoxOptions().apply {
-            setConfig(config)
-            setWorkingDir(filesDir.absolutePath)
-            setPlatformInterface(this@KukuVpnService)
-            setCommandServer(commandServer)
-        }
-        boxService = Libbox.newBoxService(options)
-        boxService?.start() // throws if the core cannot boot (bad config, port busy…)
+        val config = SingBoxConfigBuilder.build(profile, settings) // JSON string
+        val service = Libbox.newService(config, this) // throws on bad config
+        service.start() // throws if the core cannot boot (port busy, missing fields…)
+        boxService = service
+        commandServer?.setService(service)
     }
 
     /** The listener stage needs evidence: does 127.0.0.1:2080 accept? (≤15s) */
@@ -205,6 +278,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
         ServiceBridge.state.value = TunnelState.ERROR
         ServiceBridge.lastError.value = message
         ServiceBridge.log("ERROR", message)
+        ServiceBridge.stopStatsClients()
         scope.launch {
             stopCore()
             // Kill-switch behaviour: if a tunnel was actually established and
@@ -213,7 +287,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
             if (!settings.killSwitch || tunPfd == null || !settings.vpnMode) {
                 withContext(Dispatchers.Main) {
                     startNotif(getString(R.string.state_error), ongoing = false)
-                    stopForeground(ServiceInfo.STOP_FOREGROUND_REMOVE)
+                    ServiceCompat.stopForeground(this@KukuVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                     stopSelf()
                 }
             } else {
@@ -223,23 +297,32 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
     }
 
     private fun stopCore() {
-        coreAlive.set(false)
-        runCatching { boxService?.close() }.onFailure { ServiceBridge.log("WARN", "close core: ${it.message}") }
+        val service = boxService
         boxService = null
+        commandServer?.setService(null)
+        if (service != null) {
+            runCatching { service.close() }
+                .onFailure { ServiceBridge.log("WARN", "close core: ${it.message}") }
+            runCatching { Seq.destroyRef(service.refnum) }
+        }
     }
 
     private suspend fun stopTunnel(clean: Boolean) {
         stopping.set(true)
+        ServiceBridge.stopStatsClients()
         stopCore()
-        runCatching { commandServer?.close() }
+        commandServer?.let { server ->
+            runCatching { server.close() }
+            runCatching { Seq.destroyRef(server.refnum) }
+        }
         commandServer = null
-        runCatching { tunPfd?.close() }
+        tunPfd?.let { runCatching { it.close() } }
         tunPfd = null
         ServiceBridge.state.value = TunnelState.OFF
         ServiceBridge.resetSession()
         if (clean) {
             withContext(Dispatchers.Main) {
-                stopForeground(ServiceInfo.STOP_FOREGROUND_REMOVE)
+                ServiceCompat.stopForeground(this@KukuVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
@@ -248,29 +331,79 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
     /* ---------------------- libbox.PlatformInterface ----------------------- */
 
     override fun openTun(options: TunOptions): Int {
+        if (prepare(this) != null) error("android: missing vpn permission")
+
         val builder = Builder()
-        builder.setSession("Kuku VPN")
-        builder.setMtu(options.mtu.takeIf { it > 0 } ?: 9000)
-
-        var hasAddress = false
-        options.inet4Address.each { cidr -> hasAddress = addAddress(builder, cidr) || hasAddress }
-        options.inet6Address.each { cidr -> hasAddress = addAddress(builder, cidr) || hasAddress }
-        if (!hasAddress) builder.addAddress("172.19.0.1", 30)
-
-        var hasRoute = false
-        options.routes.each { cidr -> hasRoute = addRoute(builder, cidr) || hasRoute }
-        if (!hasRoute) {
-            builder.addRoute("0.0.0.0", 0)
-            builder.addRoute("::", 0)
+            .setSession("Kuku VPN")
+            .setMtu(options.mtu)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
         }
-        options.dnsServerAddresses.each { runCatching { builder.addDnsServer(it) } }
+
+        val inet4 = options.inet4Address
+        while (inet4.hasNext()) {
+            val prefix = inet4.next()
+            builder.addAddress(prefix.address(), prefix.prefix())
+        }
+        val inet6 = options.inet6Address
+        while (inet6.hasNext()) {
+            val prefix = inet6.next()
+            builder.addAddress(prefix.address(), prefix.prefix())
+        }
+
+        if (options.autoRoute) {
+            builder.addDnsServer(options.dnsServerAddress.value)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val inet4Routes = options.inet4RouteAddress
+                if (inet4Routes.hasNext()) {
+                    while (inet4Routes.hasNext()) {
+                        val p = inet4Routes.next()
+                        builder.addRoute(p.address(), p.prefix())
+                    }
+                } else {
+                    builder.addRoute("0.0.0.0", 0)
+                }
+                val inet6Routes = options.inet6RouteAddress
+                if (inet6Routes.hasNext()) {
+                    while (inet6Routes.hasNext()) {
+                        val p = inet6Routes.next()
+                        builder.addRoute(p.address(), p.prefix())
+                    }
+                } else {
+                    builder.addRoute("::", 0)
+                }
+                val inet4Exclude = options.inet4RouteExcludeAddress
+                while (inet4Exclude.hasNext()) {
+                    val p = inet4Exclude.next()
+                    builder.excludeRoute(p.address(), p.prefix())
+                }
+                val inet6Exclude = options.inet6RouteExcludeAddress
+                while (inet6Exclude.hasNext()) {
+                    val p = inet6Exclude.next()
+                    builder.excludeRoute(p.address(), p.prefix())
+                }
+            } else {
+                val inet4Range = options.inet4RouteRange
+                while (inet4Range.hasNext()) {
+                    val p = inet4Range.next()
+                    builder.addRoute(p.address(), p.prefix())
+                }
+                val inet6Range = options.inet6RouteRange
+                while (inet6Range.hasNext()) {
+                    val p = inet6Range.next()
+                    builder.addRoute(p.address(), p.prefix())
+                }
+            }
+        }
 
         applySplitTunnel(builder)
+        applyCoreSplitTunnel(builder, options)
 
         val pfd = builder.establish()
-            ?: throw IllegalStateException("establish() returned null (VPN permission/always-on conflict)")
+            ?: error("android: the application is not prepared or is revoked")
         tunPfd = pfd
-        return pfd.detachFd()
+        return pfd.fd
     }
 
     private fun applySplitTunnel(builder: Builder) {
@@ -284,19 +417,13 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
         }
     }
 
-    private fun addAddress(builder: Builder, cidr: String): Boolean = runCatching {
-        val ip = cidr.substringBefore('/')
-        val prefix = cidr.substringAfter('/', "32").toIntOrNull() ?: 32
-        builder.addAddress(ip, prefix)
-        true
-    }.getOrDefault(false)
-
-    private fun addRoute(builder: Builder, cidr: String): Boolean = runCatching {
-        val ip = cidr.substringBefore('/')
-        val prefix = cidr.substringAfter('/', "0").toIntOrNull() ?: 0
-        builder.addRoute(ip, prefix)
-        true
-    }.getOrDefault(false)
+    /** Packages requested by the sing-box config itself (include_package/exclude_package). */
+    private fun applyCoreSplitTunnel(builder: Builder, options: TunOptions) {
+        val include = options.includePackage
+        while (include.hasNext()) runCatching { builder.addAllowedApplication(include.next()) }
+        val exclude = options.excludePackage
+        while (exclude.hasNext()) runCatching { builder.addDisallowedApplication(exclude.next()) }
+    }
 
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
@@ -304,71 +431,134 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
         runCatching { protect(fd) }
     }
 
+    override fun useProcFS(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+
     override fun findConnectionOwner(
         ipProtocol: Int,
-        sourceAddress: String?,
+        sourceAddress: String,
         sourcePort: Int,
-        destinationAddress: String?,
+        destinationAddress: String,
         destinationPort: Int,
-    ): ConnectionOwner = throw UnsupportedOperationException("per-connection owner is not supported")
+    ): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            error("android: findConnectionOwner requires API 29 (useProcFS below)")
+        }
+        val uid = getSystemService(ConnectivityManager::class.java).getConnectionOwnerUid(
+            ipProtocol,
+            InetSocketAddress(sourceAddress, sourcePort),
+            InetSocketAddress(destinationAddress, destinationPort),
+        )
+        if (uid == Process.INVALID_UID) error("android: connection owner not found")
+        return uid
+    }
 
-    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
-    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
+    override fun packageNameByUid(uid: Int): String {
+        val packages = packageManager.getPackagesForUid(uid)
+        if (packages.isNullOrEmpty()) error("android: package not found")
+        return packages[0]
+    }
 
-    override fun getInterfaces(): NetworkInterfaceIterator = object : NetworkInterfaceIterator {
-        override fun hasNext(): Boolean = false
-        override fun next(): io.nekohasekai.libbox.NetworkInterface =
-            throw NoSuchElementException("no interfaces")
+    override fun uidByPackageName(packageName: String): Int {
+        return try {
+            packageManager.getPackageUid(packageName, 0)
+        } catch (e: Exception) {
+            error("android: package not found")
+        }
+    }
+
+    private fun notifyDefaultInterface(listener: InterfaceUpdateListener, network: Network) {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val lp = cm.getLinkProperties(network) ?: return
+        val name = lp.interfaceName ?: return
+        val nif = runCatching { JNetworkInterface.getByName(name) }.getOrNull() ?: return
+        val caps = cm.getNetworkCapabilities(network)
+        listener.updateDefaultInterface(
+            name,
+            nif.index,
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true,
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true,
+        )
+    }
+
+    override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = notifyDefaultInterface(listener, network)
+            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
+                notifyDefaultInterface(listener, network)
+        }
+        networkCallback = cb
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+        cm.activeNetwork?.let { notifyDefaultInterface(listener, it) }
+    }
+
+    override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        networkCallback?.let { cb ->
+            runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) }
+        }
+        networkCallback = null
+    }
+
+    override fun getInterfaces(): NetworkInterfaceIterator {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val javaInterfaces = JNetworkInterface.getNetworkInterfaces()?.toList() ?: emptyList()
+        val interfaces = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
+        for (network in cm.allNetworks) {
+            val lp = cm.getLinkProperties(network) ?: continue
+            val caps = cm.getNetworkCapabilities(network) ?: continue
+            val name = lp.interfaceName ?: continue
+            val jif = javaInterfaces.firstOrNull { it.name == name } ?: continue
+            val box = io.nekohasekai.libbox.NetworkInterface()
+            box.name = name
+            box.dnsServer = StringArray(lp.dnsServers.mapNotNull { it.hostAddress }.iterator())
+            box.type = when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Libbox.InterfaceTypeCellular
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> Libbox.InterfaceTypeEthernet
+                else -> Libbox.InterfaceTypeOther
+            }
+            box.index = jif.index
+            runCatching { box.mtu = jif.mtu }
+            box.addresses = StringArray(jif.interfaceAddresses.map { it.toPrefix() }.iterator())
+            var flags = 0
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                flags = OsConstants.IFF_UP or OsConstants.IFF_RUNNING
+            }
+            if (jif.isLoopback) flags = flags or OsConstants.IFF_LOOPBACK
+            if (jif.isPointToPoint) flags = flags or OsConstants.IFF_POINTOPOINT
+            if (jif.supportsMulticast()) flags = flags or OsConstants.IFF_MULTICAST
+            box.flags = flags
+            box.metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+            interfaces.add(box)
+        }
+        return InterfaceArray(interfaces.iterator())
     }
 
     override fun underNetworkExtension(): Boolean = false
     override fun includeAllNetworks(): Boolean = false
     override fun clearDNSCache() = Unit
-    override fun readWIFIState(): WIFIState? = null
-    override fun localDNSTransport(): io.nekohasekai.libbox.LocalDNSTransport? = null
 
-    /* --------------------- libbox.CommandServerHandler --------------------- */
+    override fun readWIFIState(): WIFIState? = null // needs location permission; core handles null
 
-    override fun writeLogs(message: LogMessage) {
-        ServiceBridge.log(message.level ?: "INFO", message.message ?: "")
+    override fun writeLog(message: String) {
+        ServiceBridge.log("INFO", message)
     }
 
-    override fun writeStatus(message: StatusMessage) {
-        // counters flow on their own stream — screens that need them subscribe directly
-        ServiceBridge.stats.value = SessionStats(
-            bytesIn = message.`in`,
-            bytesOut = message.out,
-            uptimeSec = message.uptime,
-            connectionsIn = message.connectionsIn,
-            connectionsOut = message.connectionsOut,
-        )
-    }
-
-    override fun connected() = Unit
-    override fun disConnected() = Unit
-    override fun postServiceClose() = Unit
-
-    override fun serviceStop() {
-        // the core asked to stop (config reload, fatal error, or it simply died)
-        scope.launch {
-            ServiceBridge.log("WARN", "core stopped")
-            if (settings.killSwitch && settings.vpnMode && tunPfd != null &&
-                ServiceBridge.state.value == TunnelState.ACTIVE && !stopping.get()
-            ) {
-                // unexpected death: keep the (now dead-end) VPN interface up → no leak
-                ServiceBridge.state.value = TunnelState.ERROR
-                ServiceBridge.lastError.value = "tunnel lost (kill switch active)"
-                startNotif(getString(R.string.notif_kill_switch), ongoing = true)
-            } else {
-                stopTunnel(clean = true)
-            }
+    override fun sendNotification(notification: io.nekohasekai.libbox.Notification) {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (nm.getNotificationChannel(CORE_NOTIF_CHANNEL) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CORE_NOTIF_CHANNEL, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_DEFAULT)
+            )
         }
+        val builder = NotificationCompat.Builder(this, notification.identifier)
+            .setContentTitle(notification.title)
+            .setContentText(notification.body)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setAutoCancel(true)
+        nm.notify(notification.typeID, builder.build())
     }
-
-    override fun serviceReload() = Unit
-
-    override fun getSystemProxyStatus(): SystemProxyStatus? = null
-    override fun setSystemProxyEnabled(enabled: Boolean) = Unit
 
     /* --------------------------- notification ------------------------------ */
 
@@ -387,7 +577,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
             this, 1, Intent(this, KukuVpnService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notif: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync) // replace with a proper vector in v1.1
             .setContentTitle("Kuku VPN")
             .setContentText(text)
@@ -405,8 +595,25 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface, CommandServerHand
     }
 }
 
-/** gomobile StringIterator is a plain java Iterator — small sugar for Kotlin. */
-private inline fun StringIterator?.each(action: (String) -> Unit) {
-    if (this == null) return
-    while (hasNext()) action(next())
+private fun InterfaceAddress.toPrefix(): String {
+    val addr = address
+    return if (addr is Inet6Address) {
+        "${Inet6Address.getByAddress(addr.address).hostAddress}/${networkPrefixLength}"
+    } else {
+        "${addr.hostAddress}/${networkPrefixLength}"
+    }
+}
+
+/** gomobile iterator shims (same pattern as the official client). */
+private class StringArray(private val iterator: Iterator<String>) : StringIterator {
+    override fun len(): Int = 0 // not used by the core
+    override fun hasNext(): Boolean = iterator.hasNext()
+    override fun next(): String = iterator.next()
+}
+
+private class InterfaceArray(
+    private val iterator: Iterator<io.nekohasekai.libbox.NetworkInterface>,
+) : NetworkInterfaceIterator {
+    override fun hasNext(): Boolean = iterator.hasNext()
+    override fun next(): io.nekohasekai.libbox.NetworkInterface = iterator.next()
 }

@@ -4,6 +4,8 @@ import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileType
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -135,7 +137,7 @@ object OutboundFactory {
     }
 
     private fun cidrList(raw: String): JsonArray =
-        JsonArray(raw.split(',').map { it.trim() }.filter { it.isNotEmpty() })
+        JsonArray(raw.split(',').map { it.trim() }.filter { it.isNotEmpty() }.map { JsonPrimitive(it) })
 
     /** "1,2,3" -> [1,2,3]; base64 -> bytes; empty -> null. */
     private fun parseReserved(raw: String): List<kotlinx.serialization.json.JsonElement>? {

@@ -3,6 +3,7 @@ package app.kukuvpn.core.config
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -27,7 +28,8 @@ object SingBoxConfigBuilder {
     const val TUN_TAG = "tun-in"
     const val MIXED_TAG = "mixed-in"
 
-    fun build(profile: Profile, settings: AppSettings): JsonObject = buildJsonObject {
+    /** Returns the config as a JSON string — exactly what Libbox.newService expects. */
+    fun build(profile: Profile, settings: AppSettings): String = buildJsonObject {
         putJsonObject("log") {
             put("level", "info")
             put("timestamp", true)
