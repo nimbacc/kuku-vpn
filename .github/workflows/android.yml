@@ -15,7 +15,7 @@ env:
   # ---- the two knobs you may need to touch once ----
   SINGBOX_VERSION: v1.11.15   # pin of the sing-box tag libbox is built from
   ABIS: arm64-v8a,armeabi-v7a,x86_64
-  GO_VERSION: "1.23"
+  GO_VERSION: "1.24"
   GRADLE_VERSION: "8.9"
   JAVA_VERSION: "17"
 
@@ -41,24 +41,40 @@ jobs:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      - name: point gomobile at the runner NDK
-        run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - name: setup android ndk r28 (official sing-box pin)
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28
 
-      - name: install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go install golang.org/x/mobile/cmd/gobind@latest
-          gomobile init
+      - name: export ndk path
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
+      # upstream golang.org/x/mobile@latest (2026-10) demands itself inside the target
+      # module graph and needs go >= 1.26 — sing-box v1.11.x is built with the sagernet
+      # fork pinned by the official Makefile instead. do not "upgrade" this lightly.
+      - name: install gomobile (sagernet fork, official v1.11.x pin)
+        run: |
+          go install -v github.com/sagernet/gomobile/cmd/gomobile@v0.1.4
+          go install -v github.com/sagernet/gomobile/cmd/gobind@v0.1.4
+          echo "PATH=$PATH:$(go env GOPATH)/bin" >> "$GITHUB_ENV"
+
+      # flags mirror sing-box v1.11.15 `make lib_android` (cmd/internal/build_libbox):
+      # javapkg io.nekohasekai + go package libbox => java package io.nekohasekai.libbox,
+      # which is exactly what the Kotlin sources import.
       - name: bind libbox
         run: |
           gomobile bind \
+            -v \
             -o libbox.aar \
-            -target=android \
-            -androidapi 24 \
-            -javapkg=io.nekohasekai.libbox \
-            -tags "with_quic,with_wireguard,with_gvisor,with_utls,with_clash_api" \
+            -target android \
+            -androidapi 21 \
+            -javapkg=io.nekohasekai \
+            -libname=box \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION} -s -w -buildid=" \
+            -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
             ./experimental/libbox
           ls -lh libbox.aar
 
