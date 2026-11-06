@@ -58,7 +58,10 @@ class ProfileStore(private val context: Context) {
             } ?: emptyList()
             val rest = list.filterNot { it.id == id }
             prefs[ProfileKeys.LIST] = json.encodeToString(rest)
-            if (prefs[ProfileKeys.SELECTED] == id) prefs[ProfileKeys.SELECTED] = rest.firstOrNull()?.id
+            if (prefs[ProfileKeys.SELECTED] == id) {
+                val next = rest.firstOrNull()?.id
+                if (next == null) prefs.remove(ProfileKeys.SELECTED) else prefs[ProfileKeys.SELECTED] = next
+            }
             if (prefs[ProfileKeys.LAST_GOOD] == id) prefs.remove(ProfileKeys.LAST_GOOD)
         }
     }

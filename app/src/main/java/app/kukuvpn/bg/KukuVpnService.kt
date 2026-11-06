@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.IpPrefix
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -34,6 +35,7 @@ import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.NetworkInterfaceIterator
 import io.nekohasekai.libbox.PlatformInterface
+import io.nekohasekai.libbox.RoutePrefix
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
@@ -375,13 +377,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 }
                 val inet4Exclude = options.inet4RouteExcludeAddress
                 while (inet4Exclude.hasNext()) {
-                    val p = inet4Exclude.next()
-                    builder.excludeRoute(p.address(), p.prefix())
+                    builder.excludeRoute(inet4Exclude.next().toIpPrefix())
                 }
                 val inet6Exclude = options.inet6RouteExcludeAddress
                 while (inet6Exclude.hasNext()) {
-                    val p = inet6Exclude.next()
-                    builder.excludeRoute(p.address(), p.prefix())
+                    builder.excludeRoute(inet6Exclude.next().toIpPrefix())
                 }
             } else {
                 val inet4Range = options.inet4RouteRange
@@ -594,6 +594,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
     }
 }
+
+/** same helper as the official client (io.nekohasekai.sfa.ktx.Wrappers) */
+private fun RoutePrefix.toIpPrefix(): IpPrefix = IpPrefix(java.net.InetAddress.getByName(address()), prefix())
 
 private fun InterfaceAddress.toPrefix(): String {
     val addr = address

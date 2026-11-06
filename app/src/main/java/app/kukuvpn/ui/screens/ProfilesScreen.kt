@@ -26,6 +26,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -48,6 +49,7 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilesScreen(snackbar: SnackbarHostState) {
     val context = LocalContext.current
@@ -174,7 +176,7 @@ fun ProfilesScreen(snackbar: SnackbarHostState) {
                     }
                     TextButton(onClick = {
                         val cm = context.getSystemService(android.content.ClipboardManager::class.java)
-                        cm.primaryClip?.getItemAt(0)?.text?.let { input = it }
+                        cm.primaryClip?.getItemAt(0)?.text?.let { input = it.toString() }
                     }) { Text(stringResource(R.string.profiles_paste)) }
                     TextButton(onClick = {
                         qrLauncher.launch(

@@ -38,6 +38,7 @@ import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
 import app.kukuvpn.bg.TunnelStage
 import app.kukuvpn.bg.TunnelState
+import app.kukuvpn.data.AppSettings
 import app.kukuvpn.ui.components.StatTile
 import app.kukuvpn.ui.components.StageBar
 import app.kukuvpn.ui.components.TrafficChart
@@ -60,7 +61,7 @@ fun HomeScreen() {
     val scope = rememberCoroutineScope()
     val lastError by ServiceBridge.lastError.collectAsState()
 
-    val settings by app.settingsStore.settings.collectAsState(initial = app.kukuvpn.data.AppSettings())
+    val settings by app.settingsStore.settings.collectAsState(initial = AppSettings())
     val profiles by app.profileStore.profiles.collectAsState(initial = emptyList())
     val selectedId by app.profileStore.selectedId.collectAsState(initial = null)
 
@@ -153,7 +154,7 @@ fun HomeScreen() {
 
         lastError?.let {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f))) {
-                Text(it, color = MaterialTheme.colorScheme.error, Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
             }
         }
 

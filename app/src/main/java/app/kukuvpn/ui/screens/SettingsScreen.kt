@@ -35,16 +35,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
+import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.SplitMode
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(snackbar: SnackbarHostState) {
     val context = LocalContext.current
     val app = context.applicationContext as KukuApp
     val scope = rememberCoroutineScope()
-    val settings by app.settingsStore.settings.collectAsState(initial = app.kukuvpn.data.AppSettings())
+    val settings by app.settingsStore.settings.collectAsState(initial = AppSettings())
     var appsDialog by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -138,7 +140,7 @@ fun SettingsScreen(snackbar: SnackbarHostState) {
         val apps = pm.getInstalledPackages(0)
             .mapNotNull { info ->
                 runCatching {
-                    (pm.getApplicationLabel(info.applicationInfo)?.toString() ?: info.packageName) to info.packageName
+                    (info.applicationInfo?.let { pm.getApplicationLabel(it) }?.toString() ?: info.packageName) to info.packageName
                 }.getOrNull()
             }
             .filter { it.second != self && it.second.isNotBlank() }
