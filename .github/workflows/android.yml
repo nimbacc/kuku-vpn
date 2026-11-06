@@ -1,0 +1,156 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: "Android ABIs to build libbox for"
+        default: "arm64-v8a,armeabi-v7a,x86_64"
+
+env:
+  # ---- the two knobs you may need to touch once ----
+  SINGBOX_VERSION: v1.11.15   # pin of the sing-box tag libbox is built from
+  ABIS: arm64-v8a,armeabi-v7a,x86_64
+  GO_VERSION: "1.23"
+  GRADLE_VERSION: "8.9"
+  JAVA_VERSION: "17"
+
+jobs:
+  libbox:
+    name: build libbox.aar (gomobile)
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout sing-box
+        uses: actions/checkout@v4
+        with:
+          repository: SagerNet/sing-box
+          ref: ${{ env.SINGBOX_VERSION }}
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: setup java (gomobile bind needs it)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: point gomobile at the runner NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - name: install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          gomobile init
+
+      - name: bind libbox
+        run: |
+          gomobile bind \
+            -o libbox.aar \
+            -target=android \
+            -androidapi 24 \
+            -javapkg=io.nekohasekai.libbox \
+            -tags "with_quic,with_wireguard,with_gvisor,with_utls,with_clash_api" \
+            ./experimental/libbox
+          ls -lh libbox.aar
+
+      - name: upload libbox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox
+          path: libbox.aar
+
+  build:
+    name: build APK
+    needs: libbox
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout kuku-vpn
+        uses: actions/checkout@v4
+
+      - name: setup java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: setup gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: download libbox
+        uses: actions/download-artifact@v4
+        with:
+          name: libbox
+          path: app/libs
+
+      - name: security guard — no signing material in git (RIX-style hygiene)
+        run: |
+          tracked=$(git ls-files | grep -Ei '(^|/)(keystore|release\.keystore|[A-Za-z0-9_-]+\.(jks|p12)|keystore\.properties)$' || true)
+          if [ -n "$tracked" ]; then
+            echo "::error::signing material is tracked in git: $tracked"
+            exit 1
+          fi
+          echo "OK — no signing material tracked"
+
+      - name: restore signing material from secrets (optional)
+        env:
+          KUKU_KEYSTORE_B64: ${{ secrets.KUKU_KEYSTORE_B64 }}
+          KUKU_KEYSTORE_PASSWORD: ${{ secrets.KUKU_KEYSTORE_PASSWORD }}
+          KUKU_KEY_ALIAS: ${{ secrets.KUKU_KEY_ALIAS }}
+          KUKU_KEY_PASSWORD: ${{ secrets.KUKU_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KUKU_KEYSTORE_B64" ]; then
+            printf '%s' "$KUKU_KEYSTORE_B64" | base64 -d > app/release.keystore
+            cat > app/keystore.properties <<EOF
+            storeFile=release.keystore
+            storePassword=$KUKU_KEYSTORE_PASSWORD
+            keyAlias=$KUKU_KEY_ALIAS
+            keyPassword=$KUKU_KEY_PASSWORD
+            EOF
+            echo "release signing: ENABLED (from secrets)"
+          else
+            echo "::warning::no KUKU_KEYSTORE_B64 secret — release APK will be UNSIGNED (debug APK is still signed by the debug key)"
+          fi
+
+      - name: build APKs
+        run: |
+          gradle :app:assembleRelease :app:assembleDebug --stacktrace
+
+      - name: collect release files
+        run: |
+          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1)
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/Kuku-${VER}.apk" 2>/dev/null || true
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "dist/Kuku-${VER}-unsigned.apk" 2>/dev/null || true
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/Kuku-${VER}-debug.apk"
+          cd dist && sha256sum *.apk > SHA256SUMS.txt && cd ..
+          cat dist/SHA256SUMS.txt
+
+      - name: build provenance attestation (forks of this repo fail this check by design)
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*.apk
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuku-apks
+          path: dist/
+
+      - name: publish GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
