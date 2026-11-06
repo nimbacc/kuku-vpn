@@ -76,7 +76,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         private const val CHANNEL_ID = "tunnel"
         private const val CORE_NOTIF_CHANNEL = "core"
         private const val NOTIF_ID = 100
-        private const val MAX_CANDIDATES = 3
+        private const val MAX_CANDIDATES = 4
 
         @Volatile private var libboxReady = false
     }
@@ -165,6 +165,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             return
         }
 
+        var lastCandidateError: String? = null
         for (candidate in chain) {
             if (stopping.get()) return
             ServiceBridge.activeProfile.value = candidate
@@ -196,12 +197,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 ServiceBridge.log("INFO", "tunnel verified, exit=${verdict.exitIp.ifBlank { "?" }} latency=${verdict.latencyMs}ms")
                 return
             } catch (e: Exception) {
+                lastCandidateError = e.message
                 ServiceBridge.log("ERROR", "${candidate.name}: ${e.message}")
                 stopCore()
             }
         }
 
-        fail("all ${chain.size} candidate(s) failed")
+        // surface the real cause on the Home card, not just the count
+        fail(
+            "all ${chain.size} candidate(s) failed" +
+                (lastCandidateError?.let { " — last: $it" } ?: "")
+        )
     }
 
     /** Used by serviceReload() to bounce a single profile without the fallback chain. */

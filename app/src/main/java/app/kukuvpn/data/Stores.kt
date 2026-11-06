@@ -65,14 +65,37 @@ class ProfileStore(private val context: Context) {
             val removed = list.filter { it.id == id }
             val rest = list.filterNot { it.id == id }
             prefs[ProfileKeys.LIST] = json.encodeToString(rest)
-            // deleting the auto-created free WARP profile opts out of re-creating it
+            // deleting the last auto-created free WARP profile opts out of re-creating it
             // ("warp" literal = WarpRegistrar.WARP_SOURCE, kept literal to avoid a core→data cycle)
-            if (removed.any { it.fromSubscription == "warp" }) prefs[ProfileKeys.WARP_DELETED] = "1"
+            if (removed.any { it.fromSubscription == "warp" } && rest.none { it.fromSubscription == "warp" }) {
+                prefs[ProfileKeys.WARP_DELETED] = "1"
+            }
             if (prefs[ProfileKeys.SELECTED] == id) {
                 val next = rest.firstOrNull()?.id
                 if (next == null) prefs.remove(ProfileKeys.SELECTED) else prefs[ProfileKeys.SELECTED] = next
             }
             if (prefs[ProfileKeys.LAST_GOOD] == id) prefs.remove(ProfileKeys.LAST_GOOD)
+        }
+    }
+
+    /**
+     * Bulk removal by predicate (used for migrating auto-managed WARP profiles).
+     * Selection falls back to the first survivor so the UI always has a valid pick.
+     */
+    suspend fun removeMatching(predicate: (Profile) -> Boolean) {
+        context.profileDataStore.edit { prefs ->
+            val list = prefs[ProfileKeys.LIST]?.let {
+                runCatching { json.decodeFromString<List<Profile>>(it) }.getOrNull()
+            } ?: emptyList()
+            val rest = list.filterNot(predicate)
+            if (rest.size == list.size) return@edit
+            prefs[ProfileKeys.LIST] = json.encodeToString(rest)
+            val removedIds = list.filter(predicate).map { it.id }.toSet()
+            if (prefs[ProfileKeys.SELECTED] in removedIds) {
+                val next = rest.firstOrNull()?.id
+                if (next == null) prefs.remove(ProfileKeys.SELECTED) else prefs[ProfileKeys.SELECTED] = next
+            }
+            if (prefs[ProfileKeys.LAST_GOOD] in removedIds) prefs.remove(ProfileKeys.LAST_GOOD)
         }
     }
 

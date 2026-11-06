@@ -31,6 +31,7 @@
 
     <!-- Free WARP (auto-setup) -->
     <string name="warp_profile_name">Cloudflare WARP (Free)</string>
+    <string name="warp_variant_name">Cloudflare WARP (Free) — port %1$d</string>
     <string name="warp_setting_up">Preparing your free connection (Cloudflare WARP)…</string>
 
     <!-- Profiles -->
