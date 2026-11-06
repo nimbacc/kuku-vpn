@@ -93,7 +93,7 @@ fun KukuAppRoot() {
                 val current by nav.currentBackStackEntryAsState()
                 tabs.forEach { tab ->
                     NavigationBarItem(
-                        selected = current == tab.route,
+                        selected = current?.destination?.route == tab.route,
                         onClick = { nav.navigate(tab.route) { launchSingleTop = true; popUpTo("home") { saveState = true } } },
                         icon = tab.icon,
                         label = { Text(stringResource(tab.labelRes)) },
