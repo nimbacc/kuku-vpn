@@ -1,0 +1,84 @@
+<resources>
+    <!-- States -->
+    <string name="state_off">قطع</string>
+    <string name="state_preparing">آماده‌سازی…</string>
+    <string name="state_connecting">اتصال…</string>
+    <string name="state_verifying">بررسی…</string>
+    <string name="state_active">متصل</string>
+    <string name="state_error">خطا</string>
+
+    <!-- Stages -->
+    <string name="stage_core">هسته</string>
+    <string name="stage_listener">شنونده</string>
+    <string name="stage_tunnel">تونل</string>
+    <string name="stage_exit">خروج</string>
+
+    <!-- Home -->
+    <string name="btn_connect">اتصال</string>
+    <string name="btn_disconnect">قطع</string>
+    <string name="btn_cancel">لغو</string>
+    <string name="mode_vpn">تونل کامل دستگاه</string>
+    <string name="mode_proxy">پروکسی SOCKS/HTTP</string>
+    <string name="no_profile_title">هنوز پروفایلی نداری</string>
+    <string name="no_profile_body">از تب «پروفایل‌ها» یک اشتراک وارد کن، لینک کانفیگ پیست کن یا QR اسکن کن.</string>
+    <string name="stats_download">دریافت</string>
+    <string name="stats_upload">ارسال</string>
+    <string name="stats_uptime">مدت جلسه</string>
+    <string name="stats_exit">IP خروجی</string>
+    <string name="verify_note">«متصل» فقط وقتی نمایش داده می‌شود که یک درخواست واقعی از تونل عبور کرده و پاسخ برگشته باشد.</string>
+
+    <!-- Profiles -->
+    <string name="tab_profiles">پروفایل‌ها</string>
+    <string name="tab_home">خانه</string>
+    <string name="tab_logs">گزارش</string>
+    <string name="tab_settings">تنظیمات</string>
+    <string name="profiles_add">افزودن پروفایل</string>
+    <string name="profiles_import_link">ورود لینک کانفیگ</string>
+    <string name="profiles_import_subscription">ورود اشتراک</string>
+    <string name="profiles_scan_qr">اسکن QR</string>
+    <string name="profiles_paste">پیست از کلیپ‌بورد</string>
+    <string name="profiles_import">ورود</string>
+    <string name="profiles_url_hint">لینک کانفیگ یا URL اشتراک</string>
+    <string name="profiles_imported">%1$d پروفایل وارد شد</string>
+    <string name="profiles_import_failed">ورود ناموفق: %1$s</string>
+    <string name="profiles_selected">انتخاب‌شده</string>
+    <string name="profiles_last_good">آخرین موفق</string>
+
+    <!-- Settings -->
+    <string name="settings_title">تنظیمات</string>
+    <string name="settings_language">زبان</string>
+    <string name="settings_theme">پوسته</string>
+    <string name="theme_system">هماهنگ با سیستم</string>
+    <string name="theme_light">روشن</string>
+    <string name="theme_dark">تاریک</string>
+    <string name="settings_split">اسپلیت تانل</string>
+    <string name="split_all">همهٔ برنامه‌ها از تونل</string>
+    <string name="split_include">فقط برنامه‌های انتخابی</string>
+    <string name="split_exclude">همه به‌جز برنامه‌های انتخابی</string>
+    <string name="split_apps_hint">خود Kuku همیشه از تونل مستثنا می‌ماند تا حلقهٔ مسیریابی ساخته نشود.</string>
+    <string name="settings_kill_switch">ضد نشت (Kill switch)</string>
+    <string name="kill_switch_desc">اگر تونل ناگهان از بین برود، رابط VPN بالا می‌ماند تا هیچ ترافیکی بیرون تونل نشت نکند. برای محافظت کامل، «Always-on VPN + Block without VPN» سیستم را هم فعال کن.</string>
+    <string name="kill_switch_system">باز کردن تنظیمات Always-on VPN</string>
+    <string name="settings_auto_fallback">جایگزینی خودکار</string>
+    <string name="fallback_desc">اگر پروفایل انتخابی نتواند اتصال واقعی را ثابت کند، گزینه‌های رتبه‌بندی‌شدهٔ بعدی امتحان می‌شوند و روش موفق به یادگار می‌ماند.</string>
+    <string name="settings_sub_auto_update">به‌روزرسانی خودکار اشتراک‌ها</string>
+    <string name="settings_notifications">اعلان‌ها</string>
+
+    <!-- Logs -->
+    <string name="logs_clear">پاک کردن</string>
+    <string name="logs_copy">کپی همه</string>
+    <string name="logs_empty">هنوز گزارشی نیست</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel">وضعیت تونل</string>
+    <string name="notif_active">تونل فعال است</string>
+    <string name="notif_connecting">در حال برپایی تونل…</string>
+    <string name="notif_kill_switch">تونل قطع شد — ترافیک مسدود است (ضد نشت)</string>
+    <string name="notif_action_stop">قطع اتصال</string>
+
+    <!-- Misc -->
+    <string name="error_vpn_permission">مجوز VPN داده نشد</string>
+    <string name="error_core">خطای هسته: %1$s</string>
+    <string name="ok">باشه</string>
+    <string name="cancel">لغو</string>
+</resources>

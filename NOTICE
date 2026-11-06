@@ -1,0 +1,21 @@
+# NOTICE / Third-party attributions
+
+Kuku VPN is a GPL-3.0-or-later project. It depends on the following
+third-party components:
+
+| Component | Role | License | Source |
+|---|---|---|---|
+| sing-box / libbox | tunnel core (all transports, TUN stack) | GPL-3.0 family | https://github.com/SagerNet/sing-box |
+| gomobile | Java/Go bridge used to build libbox.aar | Apache-2.0 / BSD-style | https://github.com/golang/mobile |
+| Jetpack Compose, DataStore, Navigation, AppCompat | Android UI & storage | Apache-2.0 | https://developer.android.com/jetpack |
+| OkHttp | HTTP client (subscription fetch, tunnel probe) | Apache-2.0 | https://square.github.io/okhttp/ |
+| zxing-android-embedded, zxing/core | QR scanning | Apache-2.0 | https://github.com/journeyapps/zxing-android-embedded |
+| kotlinx.serialization / coroutines | JSON persistence, async | Apache-2.0 | https://github.com/Kotlin |
+
+Because Kuku VPN links against libbox (GPL v3 family), the whole application is
+distributed under GPL-3.0-or-later and the complete source must accompany any
+distribution.
+
+Trademark note: "Kuku VPN" is the name of THIS project. It has no affiliation
+with, endorsement from, or ownership claim over sing-box, Cloudflare, or any
+other upstream project. See TRADEMARK.md.

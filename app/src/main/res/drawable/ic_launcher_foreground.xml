@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Kuku VPN launcher mark: an abstract shield with a keyhole tunnel —
+     original artwork, safe to redistribute. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.5"
+        android:scaleY="0.5"
+        android:translateX="27"
+        android:translateY="27">
+        <path
+            android:fillColor="#2DD4A7"
+            android:pathData="M54,6 L94,20 L94,54 C94,78 76,94 54,100 C32,94 14,78 14,54 L14,20 Z" />
+        <path
+            android:fillColor="#0E1116"
+            android:pathData="M54,30 C46,30 40,36 40,44 C40,49 42,52 46,55 L44,74 L64,74 L62,55 C66,52 68,49 68,44 C68,36 62,30 54,30 Z M54,38 C58,38 61,40 61,44 C61,47 59,49 56,50 L54,51 L52,50 C49,49 47,47 47,44 C47,40 50,38 54,38 Z" />
+    </group>
+</vector>

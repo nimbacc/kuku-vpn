@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+captures/
+.DS_Store
+
+# libbox is produced by CI (gomobile) or scripts/build-libbox.sh — never commit
+app/libs/libbox.aar
+app/libs/libbox-*.aar
+
+# Signing material must NEVER be committed (see SECURITY.md)
+app/release.keystore
+app/keystore.properties
+*.jks
+*.p12
+keystore/
+
+# CI artifacts
+*.apk
+*.aab
+SHA256SUMS.txt

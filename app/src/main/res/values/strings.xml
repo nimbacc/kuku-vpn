@@ -1,0 +1,88 @@
+<resources>
+    <string name="app_name" translatable="false">Kuku VPN</string>
+
+    <!-- States -->
+    <string name="state_off">Disconnected</string>
+    <string name="state_preparing">Preparing…</string>
+    <string name="state_connecting">Connecting…</string>
+    <string name="state_verifying">Verifying…</string>
+    <string name="state_active">Connected</string>
+    <string name="state_error">Error</string>
+
+    <!-- Stages -->
+    <string name="stage_core">Core</string>
+    <string name="stage_listener">Listener</string>
+    <string name="stage_tunnel">Tunnel</string>
+    <string name="stage_exit">Exit</string>
+
+    <!-- Home -->
+    <string name="btn_connect">Connect</string>
+    <string name="btn_disconnect">Disconnect</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="mode_vpn">Full-device VPN</string>
+    <string name="mode_proxy">SOCKS/HTTP proxy</string>
+    <string name="no_profile_title">No profile yet</string>
+    <string name="no_profile_body">Import a subscription, a share link, or scan a QR code from the Profiles tab.</string>
+    <string name="stats_download">Download</string>
+    <string name="stats_upload">Upload</string>
+    <string name="stats_uptime">Session</string>
+    <string name="stats_exit">Exit IP</string>
+    <string name="verify_note">"Connected" is shown only after a real request has passed through the tunnel and come back.</string>
+
+    <!-- Profiles -->
+    <string name="tab_profiles">Profiles</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_logs">Logs</string>
+    <string name="tab_settings">Settings</string>
+    <string name="profiles_add">Add profile</string>
+    <string name="profiles_import_link">Import share link</string>
+    <string name="profiles_import_subscription">Import subscription</string>
+    <string name="profiles_scan_qr">Scan QR code</string>
+    <string name="profiles_paste">Paste from clipboard</string>
+    <string name="profiles_import">Import</string>
+    <string name="profiles_url_hint">Link or subscription URL</string>
+    <string name="profiles_imported">%1$d profile(s) imported</string>
+    <string name="profiles_import_failed">Import failed: %1$s</string>
+    <string name="profiles_selected">Selected</string>
+    <string name="profiles_delete">Delete</string>
+    <string name="profiles_empty">No profiles yet</string>
+    <string name="profiles_last_good">Last known-good</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_theme">Theme</string>
+    <string name="theme_system">Follow system</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="settings_split">Split tunneling</string>
+    <string name="split_all">All apps through tunnel</string>
+    <string name="split_include">Only selected apps</string>
+    <string name="split_exclude">All except selected apps</string>
+    <string name="split_apps_hint">Kuku itself is always excluded from the tunnel to avoid a routing loop.</string>
+    <string name="settings_kill_switch">Kill switch</string>
+    <string name="kill_switch_desc">If the tunnel dies unexpectedly, the VPN interface stays up so no traffic leaks outside the tunnel. Enable the system "Always-on VPN + Block without VPN" for the strongest protection.</string>
+    <string name="kill_switch_system">Open Always-on VPN settings</string>
+    <string name="settings_auto_fallback">Automatic fallback</string>
+    <string name="fallback_desc">If the selected profile cannot prove a real connection, ranked alternatives are tried and the successful one is remembered.</string>
+    <string name="settings_sub_auto_update">Update subscriptions automatically</string>
+    <string name="settings_notifications">Notifications</string>
+
+    <!-- Logs -->
+    <string name="logs_clear">Clear</string>
+    <string name="logs_copy">Copy all</string>
+    <string name="logs_empty">No logs yet</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel">Tunnel status</string>
+    <string name="notif_active">Tunnel is active</string>
+    <string name="notif_connecting">Establishing tunnel…</string>
+    <string name="notif_kill_switch">Tunnel lost — traffic blocked (kill switch)</string>
+    <string name="notif_action_stop">Disconnect</string>
+
+    <!-- Misc -->
+    <string name="error_vpn_permission">VPN permission was not granted</string>
+    <string name="error_core">Core error: %1$s</string>
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+</resources>

@@ -1,0 +1,20 @@
+Kuku VPN is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).
+
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The canonical license text is available at:
+    https://www.gnu.org/licenses/gpl-3.0.txt
+
+NOTE FOR RELEASE MAINTAINERS
+============================
+Before publishing the first GitHub release, replace this file with the full,
+verbatim text of the GNU General Public License v3.0 from the URL above:
+
+    curl -o LICENSE https://www.gnu.org/licenses/gpl-3.0.txt
+
+This project links against libbox from SagerNet/sing-box, which is licensed
+under the GNU GPL v3 family; distributing Kuku VPN therefore requires the
+whole project to be distributed under a GPL-compatible license with sources
+available (see NOTICE for third-party attributions).
+
+Copyright (C) 2026 Kuku VPN contributors
