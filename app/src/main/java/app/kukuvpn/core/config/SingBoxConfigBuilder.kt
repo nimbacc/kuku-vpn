@@ -60,7 +60,14 @@ object SingBoxConfigBuilder {
                     put("inet4_address", buildJsonArray { add("172.19.0.1/30") })
                     put("inet6_address", buildJsonArray { add("fdfe:dcba:9876::1/126") })
                     put("mtu", 9000)
-                    put("auto_route", false)   // Android VpnService owns routing
+                    // auto_route MUST be true on Android: libbox forwards it to
+                    // TunOptions.autoRoute and the service's openTun() then installs
+                    // the default routes (0.0.0.0/0 + ::/0) and the DNS server on the
+                    // VpnService.Builder. With "false" the TUN comes up with no
+                    // routes at all: the verifier (via 127.0.0.1:2080) still passes
+                    // and the UI shows Connected, but device traffic bypasses the
+                    // tunnel entirely -> "connected yet nothing loads", 0 B stats.
+                    put("auto_route", true)
                     put("strict_route", false)
                     put("stack", "gvisor")
                     put("sniff", true)
