@@ -19,7 +19,10 @@ import kotlinx.serialization.json.putJsonObject
 object OutboundFactory {
 
     fun build(profile: Profile, tag: String = "proxy"): JsonObject = buildJsonObject {
-        put("type", profile.type.name.lowercase())
+        // MASQUE-engine candidates ride the in-process warpcore SOCKS5 proxy:
+        // sing-box → 127.0.0.1:SOCKS_PORT → MASQUE(HTTP/3|HTTP/2) → Cloudflare.
+        val masque = profile.type == ProfileType.WIREGUARD && profile.transport.startsWith("masque")
+        put("type", if (masque) "socks" else profile.type.name.lowercase())
         put("tag", tag)
         put("server", profile.host)
         put("server_port", profile.port)
@@ -66,12 +69,16 @@ object OutboundFactory {
                 buildTls(this, profile, trojanDefaultTls = true)
             }
             ProfileType.WIREGUARD -> {
-                put("local_address", cidrList(profile.wgAddresses))
-                put("private_key", profile.privateKey)
-                put("peer_public_key", profile.publicKey)
-                if (profile.preSharedKey.isNotBlank()) put("pre_shared_key", profile.preSharedKey)
-                put("mtu", profile.wgMtu)
-                parseReserved(profile.wgReserved)?.let { put("reserved", JsonArray(it)) }
+                if (masque) {
+                    put("version", "5")
+                } else {
+                    put("local_address", cidrList(profile.wgAddresses))
+                    put("private_key", profile.privateKey)
+                    put("peer_public_key", profile.publicKey)
+                    if (profile.preSharedKey.isNotBlank()) put("pre_shared_key", profile.preSharedKey)
+                    put("mtu", profile.wgMtu)
+                    parseReserved(profile.wgReserved)?.let { put("reserved", JsonArray(it)) }
+                }
             }
             ProfileType.SSH -> {
                 put("user", profile.sshUser.ifBlank { "root" })

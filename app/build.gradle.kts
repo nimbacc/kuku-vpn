@@ -13,8 +13,8 @@ android {
         applicationId = "app.kukuvpn"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.1.0"
         resourceConfigurations += listOf("en", "fa")
     }
 
@@ -82,6 +82,9 @@ dependencies {
     // libbox (sing-box core) — produced by .github/workflows/android.yml (job: libbox)
     // or scripts/build-libbox.sh locally. Never committed to git.
     implementation(files("libs/libbox.aar"))
+    // warpcore (Cloudflare WARP over MASQUE engine) — produced by the
+    // warpcore CI job from third_party/warpcore. Never committed to git.
+    implementation(files("libs/warpcore.aar"))
 
     // Compose (Material 3)
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")

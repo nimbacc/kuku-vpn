@@ -29,6 +29,7 @@
 
     <!-- Free WARP (auto-setup) -->
     <string name="warp_profile_name">کلادفلر WARP (رایگان)</string>
+    <string name="warp_masque_h2_name">کلادفلر WARP (پشتیبان TCP)</string>
     <string name="warp_variant_name">کلادفلر WARP (رایگان) — پورت %1$d</string>
     <string name="warp_setting_up">در حال آماده‌سازی اتصال رایگان (کلادفلر WARP)…</string>
 

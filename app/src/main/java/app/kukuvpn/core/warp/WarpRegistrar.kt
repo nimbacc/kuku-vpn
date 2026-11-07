@@ -57,6 +57,10 @@ object WarpRegistrar {
     /** Marker stored in Profile.fromSubscription so we can find our profiles again. */
     const val WARP_SOURCE = "warp"
 
+    /** Profile.transport values that route through the local MASQUE engine. */
+    const val TRANSPORT_MASQUE = "masque"       // HTTP/3 over QUIC (UDP 443)
+    const val TRANSPORT_MASQUE_H2 = "masque-h2" // HTTP/2 over TCP 443 — survives full UDP blocks
+
     private const val API = "https://api.cloudflareclient.com/v0a2158/reg"
     private const val DEFAULT_PEER_KEY = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
 
@@ -76,8 +80,9 @@ object WarpRegistrar {
 
     /**
      * Idempotent: called on every app start.
-     *  - no WARP profiles + not opted out  → register a fresh identity, add 4 port variants
+     *  - no WARP profiles + not opted out  → register a fresh identity, add MASQUE + 4 port variants
      *  - legacy profiles with a hostname endpoint → wipe and re-register (DNS-deadlock build)
+     *  - legacy installs without MASQUE profiles → inject them and steer the selection over
      *  - IP profiles but fewer than 4 → clone the stored identity into the missing ports
      */
     suspend fun ensureProfile(context: Context) = withContext(Dispatchers.IO) {
@@ -89,7 +94,7 @@ object WarpRegistrar {
 
             existing.isEmpty() -> registerFresh(context, store)
 
-            existing.any { !IP_REGEX.matches(it.host) } -> {
+            existing.any { !IP_REGEX.matches(it.host) && it.transport == "tcp" } -> {
                 // v1 build used "engage.cloudflareclient.com" → the DNS deadlock bug;
                 // remove the broken profiles and start clean.
                 store.removeMatching { it.fromSubscription == WARP_SOURCE }
@@ -97,10 +102,25 @@ object WarpRegistrar {
             }
 
             else -> {
+                val additions = mutableListOf<Profile>()
+                if (existing.none { it.transport == TRANSPORT_MASQUE }) {
+                    additions += masqueProfile(context, TRANSPORT_MASQUE)
+                }
+                if (existing.none { it.transport == TRANSPORT_MASQUE_H2 }) {
+                    additions += masqueProfile(context, TRANSPORT_MASQUE_H2)
+                }
                 val missing = FALLBACK_PORTS.filter { port -> existing.none { it.port == port } }
                 if (missing.isNotEmpty()) {
                     val base = existing.first()
-                    store.addAll(missing.map { port -> variantOf(context, base, port) })
+                    additions += missing.map { port -> variantOf(context, base, port) }
+                }
+                if (additions.isNotEmpty()) {
+                    store.addAll(additions)
+                    // A legacy install that never verified anything gets steered to
+                    // MASQUE — plain WireGuard is exactly what failed for it before.
+                    if (store.lastGoodId.first() == null) {
+                        additions.firstOrNull { it.transport == TRANSPORT_MASQUE }?.let { store.select(it.id) }
+                    }
                 }
                 _status.value = WarpSetup.READY
             }
@@ -109,10 +129,16 @@ object WarpRegistrar {
 
     private suspend fun registerFresh(context: Context, store: app.kukuvpn.data.ProfileStore) {
         _status.value = WarpSetup.REGISTERING
-        val profiles = runCatching { registerAll(context) }.getOrNull()
-        if (profiles != null) {
+        // MASQUE candidates come first and don't depend on the WireGuard
+        // registration succeeding — the engine mints its own identity.
+        val profiles = buildList {
+            add(masqueProfile(context, TRANSPORT_MASQUE))
+            add(masqueProfile(context, TRANSPORT_MASQUE_H2))
+            addAll(runCatching { registerAll(context) }.getOrDefault(emptyList()))
+        }
+        if (profiles.size >= 2) {
             store.addAll(profiles) // auto-selects when nothing is selected
-            store.select(profiles.first().id)
+            store.select(profiles.first().id) // MASQUE H3 is the default path
             _status.value = WarpSetup.READY
         } else {
             _status.value = WarpSetup.FAILED
@@ -186,6 +212,22 @@ object WarpRegistrar {
             port = port,
             createdAt = System.currentTimeMillis(),
         )
+
+    /**
+     * A local-engine candidate: sing-box sends everything to the in-process
+     * MASQUE engine over SOCKS (127.0.0.1:SOCKS_PORT); the engine carries the
+     * WireGuard stream to Cloudflare inside HTTP/3 or HTTP/2.
+     */
+    private fun masqueProfile(context: Context, transport: String): Profile = Profile(
+        name = if (transport == TRANSPORT_MASQUE) context.getString(R.string.warp_profile_name)
+        else context.getString(R.string.warp_masque_h2_name),
+        type = ProfileType.WIREGUARD,
+        host = "127.0.0.1",
+        port = WarpMasqueEngine.SOCKS_PORT,
+        transport = transport,
+        wgMtu = 1280,
+        fromSubscription = WARP_SOURCE,
+    )
 
     private fun postRegistration(publicKeyB64: String): JsonObject {
         val tos = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.000'Z'", Locale.US).apply {

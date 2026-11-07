@@ -23,10 +23,12 @@ import app.kukuvpn.R
 import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.core.fallback.FallbackEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
+import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileStore
+import app.kukuvpn.data.ProfileType
 import app.kukuvpn.data.SettingsStore
 import go.Seq
 import io.nekohasekai.libbox.BoxService
@@ -77,7 +79,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         private const val CHANNEL_ID = "tunnel"
         private const val CORE_NOTIF_CHANNEL = "core"
         private const val NOTIF_ID = 100
-        private const val MAX_CANDIDATES = 4
+        private const val MAX_CANDIDATES = 6
 
         /**
          * Cloudflare WARP anycast IPs. ISPs in Iran filter them selectively
@@ -184,9 +186,23 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             ServiceBridge.log("INFO", "trying profile: ${candidate.name} (${candidate.summary()})")
             ServiceBridge.state.value = TunnelState.CONNECTING
 
+            // MASQUE candidates boot the in-process engine first; the endpoint
+            // sweep only applies to plain WireGuard candidates.
+            val isMasque = candidate.type == ProfileType.WIREGUARD &&
+                candidate.transport.startsWith("masque")
+            if (isMasque) {
+                ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
+                WarpMasqueEngine.ensureRegistered(this)
+                WarpMasqueEngine.start(
+                    this,
+                    useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
+                ) // blocking; throws with the engine's real error on failure
+                ServiceBridge.log("INFO", "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})")
+            }
+
             // WARP candidates sweep every known anycast IP — the identity is
             // identical, only the UDP endpoint changes, so no re-registration.
-            val endpoints = if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE)
+            val endpoints = if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE && !isMasque)
                 (listOf(candidate.host) + WARP_ENDPOINT_IPS).distinct()
             else listOf(candidate.host)
 
@@ -229,6 +245,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: Exception) {
                     lastError = e
                     ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
+                    if (isMasque) WarpMasqueEngine.stop()
                     stopCore()
                 }
             }
@@ -321,6 +338,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         ServiceBridge.stopStatsClients()
         scope.launch {
             stopCore()
+            WarpMasqueEngine.stop()
             // Kill-switch behaviour: if a tunnel was actually established and
             // the user wants protection, the VPN interface stays up so traffic
             // blackholes instead of leaking. Only the notification changes.
@@ -345,12 +363,15 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 .onFailure { ServiceBridge.log("WARN", "close core: ${it.message}") }
             runCatching { Seq.destroyRef(service.refnum) }
         }
+        // NOTE: the MASQUE engine is intentionally NOT stopped here —
+        // startCore() calls this first and the engine must outlive it.
     }
 
     private suspend fun stopTunnel(clean: Boolean) {
         stopping.set(true)
         ServiceBridge.stopStatsClients()
         stopCore()
+        WarpMasqueEngine.stop()
         commandServer?.let { server ->
             runCatching { server.close() }
             runCatching { Seq.destroyRef(server.refnum) }
