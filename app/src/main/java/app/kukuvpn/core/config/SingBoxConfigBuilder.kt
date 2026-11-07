@@ -35,11 +35,27 @@ object SingBoxConfigBuilder {
             put("timestamp", true)
         }
 
+        // BUG HISTORY (v1.2.2): dns-remote used to be "tcp://1.1.1.1" (DNS over
+        // TCP port 53, detour proxy). Many free socks5 providers block ALL
+        // connections to port 53 from their exit (anti DNS-abuse policy), so
+        // every exchange died with "socks5: request rejected, code=4" (host
+        // unreachable). The probe still passed — OkHttp sends CONNECT with the
+        // hostname and the socks5 server resolves remotely — so the UI showed
+        // Connected while every app's DNS failed: instagram/facebook logs full
+        // of "dns: exchange failed", 0 B of traffic.
+        // FIX: DNS over HTTPS (https://1.1.1.1/dns-query). It is still tunneled
+        // through the proxy (Iranian direct DNS is poisoned), but now rides
+        // TCP 443 — the exact same path app traffic uses, which the provider
+        // MUST allow for the tunnel to be useful at all. IP-literal URL means
+        // no bootstrap resolution is needed.
+        // "strategy: ipv4_only" keeps apps off IPv6 targets, which many socks5
+        // exits cannot reach (AAAA answered → connect hangs → more "dead" apps).
         putJsonObject("dns") {
+            put("strategy", "ipv4_only")
             putJsonArray("servers") {
                 add(buildJsonObject {
                     put("tag", "dns-remote")
-                    put("address", "tcp://1.1.1.1")
+                    put("address", "https://1.1.1.1/dns-query")
                     put("detour", "proxy")
                 })
                 add(buildJsonObject {
