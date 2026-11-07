@@ -49,7 +49,8 @@ object WarpMasqueEngine {
      */
     fun start(context: Context, useHttp2: Boolean) {
         stop() // deterministic teardown of any previous instance
-        Warpcore.start(configDir(context), SOCKS_PORT, useHttp2)
+        // gomobile binds Go int as Java long
+        Warpcore.start(configDir(context), SOCKS_PORT.toLong(), useHttp2)
         started = true
     }
 
