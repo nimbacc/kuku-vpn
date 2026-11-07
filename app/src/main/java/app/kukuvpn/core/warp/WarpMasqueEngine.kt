@@ -1,12 +1,16 @@
 package app.kukuvpn.core.warp
 
 import android.content.Context
-import app.kukuvpn.warpcore.Warpcore
+import io.nekohasekai.warpcore.Warpcore
 import java.io.File
 
 /**
  * Thin Kotlin facade over the [Warpcore] gomobile binding — the Aether-style
  * "connects anywhere" engine: Cloudflare WARP over MASQUE.
+ *
+ * Note: the engine lives in the COMBINED aar (libbox + warpcore are bound in a
+ * single gomobile invocation, see third_party/corebind/doc.go), so the java
+ * package is io.nekohasekai.warpcore.
  *
  * MASQUE carries the WireGuard stream inside HTTP/3 (QUIC, UDP 443) or — on
  * networks where the ISP filters all UDP — HTTP/2 over plain TCP 443, which

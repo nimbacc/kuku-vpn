@@ -20,75 +20,20 @@ env:
   JAVA_VERSION: "17"
 
 jobs:
-  libbox:
-    name: build libbox.aar (gomobile)
+  # ONE aar for BOTH engines. Every gomobile aar embeds the go.Seq runtime —
+  # two aars collide ("Duplicate class go.Seq", run #14) and even a hand-stripped
+  # pair would run two independent Go runtimes over one JNI Seq protocol and
+  # corrupt each other's refnums. So sing-box libbox and the vendored
+  # WARP-over-MASQUE engine (usque) are bound together into warpcore.aar
+  # (one go.Seq, one libkuku.so). See third_party/corebind/doc.go.
+  # Dependency-graph note: sing-box v1.11.x uses the sagernet FORKS
+  # (sagernet/gvisor, sagernet/quic-go) while usque uses the upstreams
+  # (gvisor.dev/gvisor, quic-go/quic-go) — distinct module paths, no MVS clash.
+  core:
+    name: build warpcore.aar (libbox + MASQUE engine, one gomobile bind)
     runs-on: ubuntu-latest
     steps:
-      - name: checkout sing-box
-        uses: actions/checkout@v4
-        with:
-          repository: SagerNet/sing-box
-          ref: ${{ env.SINGBOX_VERSION }}
-
-      - name: setup go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: setup java (gomobile bind needs it)
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: ${{ env.JAVA_VERSION }}
-
-      - name: setup android ndk r28 (official sing-box pin)
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r28
-
-      - name: export ndk path
-        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
-
-      # upstream golang.org/x/mobile@latest (2026-10) demands itself inside the target
-      # module graph and needs go >= 1.26 — sing-box v1.11.x is built with the sagernet
-      # fork pinned by the official Makefile instead. do not "upgrade" this lightly.
-      - name: install gomobile (sagernet fork, official v1.11.x pin)
-        run: |
-          go install -v github.com/sagernet/gomobile/cmd/gomobile@v0.1.4
-          go install -v github.com/sagernet/gomobile/cmd/gobind@v0.1.4
-          echo "PATH=$PATH:$(go env GOPATH)/bin" >> "$GITHUB_ENV"
-
-      # flags mirror sing-box v1.11.15 `make lib_android` (cmd/internal/build_libbox):
-      # javapkg io.nekohasekai + go package libbox => java package io.nekohasekai.libbox,
-      # which is exactly what the Kotlin sources import.
-      - name: bind libbox
-        run: |
-          gomobile bind \
-            -v \
-            -o libbox.aar \
-            -target android \
-            -androidapi 21 \
-            -javapkg=io.nekohasekai \
-            -libname=box \
-            -trimpath \
-            -buildvcs=false \
-            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION} -s -w -buildid=" \
-            -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
-            ./experimental/libbox
-          ls -lh libbox.aar
-
-      - name: upload libbox artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libbox
-          path: libbox.aar
-
-  warpcore:
-    name: build warpcore.aar (gomobile, WARP-over-MASQUE engine)
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout kuku-vpn (engine is vendored under third_party/warpcore)
+      - name: checkout kuku-vpn
         uses: actions/checkout@v4
 
       - name: setup java (gomobile bind needs it)
@@ -108,7 +53,7 @@ jobs:
 
       # gomobile v0.1.4 (sagernet fork) pulls golang.org/x/tools v0.16.0, whose
       # tokeninternal hack does NOT compile under go >= 1.25 ("invalid array
-      # length -delta * delta", CI run #13). Install the tools with go 1.24 —
+      # length -delta * delta", run #13). Install the tools with go 1.24 —
       # the binaries are prebuilt afterwards — and bind with go 1.26, which
       # usque (quic-go 0.60) requires.
       - name: setup go 1.24 (toolchain for building the gomobile binaries)
@@ -116,7 +61,7 @@ jobs:
         with:
           go-version: "1.24"
 
-      - name: install gomobile (sagernet fork, same pin as libbox)
+      - name: install gomobile (sagernet fork, official v1.11.x pin)
         run: |
           go install -v github.com/sagernet/gomobile/cmd/gomobile@v0.1.4
           go install -v github.com/sagernet/gomobile/cmd/gobind@v0.1.4
@@ -126,41 +71,46 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.26"
-          cache-dependency-path: third_party/warpcore/go.sum
 
-      # The gobind-generated glue imports github.com/sagernet/gomobile/bind, so
-      # the target module must require the fork (sing-box's own go.mod does the
-      # same). go get also records the go.sum entries the -mod=readonly build needs.
-      - name: register gomobile fork in the warpcore module
-        working-directory: third_party/warpcore
+      # tidy resolves BOTH engine graphs (sing-box + usque) and records go.sum;
+      # tidy then drops gomobile (doc.go does not import it) — go get re-adds the
+      # require the generated bind glue needs (sing-box's own go.mod does the same).
+      - name: resolve module graph (both engines) + register gomobile fork
+        working-directory: third_party/corebind
         run: |
+          go mod tidy
           go get github.com/sagernet/gomobile@v0.1.4
           go mod download github.com/sagernet/gomobile
 
-      - name: bind warpcore
-        working-directory: third_party/warpcore
+      # One bind, two Go packages: io.nekohasekai.libbox.* (sing-box core) and
+      # io.nekohasekai.warpcore.* (MASQUE engine). Flags mirror the official
+      # sing-box `make lib_android` plus the engine package.
+      - name: bind libbox + warpcore into one aar
+        working-directory: third_party/corebind
         run: |
           gomobile bind \
             -v \
             -o warpcore.aar \
             -target android \
             -androidapi 24 \
-            -javapkg=app.kukuvpn \
-            -libname=warpcore \
+            -javapkg=io.nekohasekai \
+            -libname=kuku \
             -trimpath \
             -buildvcs=false \
-            ./mobile
+            -ldflags "-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION} -s -w -buildid=" \
+            -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
+            github.com/sagernet/sing-box/experimental/libbox github.com/Diniboy1123/usque/mobile
           ls -lh warpcore.aar
 
-      - name: upload warpcore artifact
+      - name: upload core artifact
         uses: actions/upload-artifact@v4
         with:
           name: warpcore
-          path: third_party/warpcore/warpcore.aar
+          path: third_party/corebind/warpcore.aar
 
   build:
     name: build APK
-    needs: [libbox, warpcore]
+    needs: [core]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -181,13 +131,7 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: download libbox
-        uses: actions/download-artifact@v4
-        with:
-          name: libbox
-          path: app/libs
-
-      - name: download warpcore
+      - name: download warpcore (combined libbox + MASQUE engine aar)
         uses: actions/download-artifact@v4
         with:
           name: warpcore

@@ -2,10 +2,12 @@
 -keep class io.nekohasekai.libbox.** { *; }
 -dontwarn io.nekohasekai.libbox.**
 
-# Keep warpcore (gomobile, WARP-over-MASQUE engine) the same way: the Go side
-# reaches the generated Java glue over JNI and Kotlin calls Warpcore.* by name.
--keep class app.kukuvpn.warpcore.** { *; }
--dontwarn app.kukuvpn.warpcore.**
+# Keep the warpcore (gomobile, WARP-over-MASQUE engine) classes the same way:
+# the Go side reaches the generated Java glue over JNI and Kotlin calls
+# Warpcore.* by name. The engine ships inside the combined aar under
+# io.nekohasekai.warpcore (libbox keeps io.nekohasekai.libbox).
+-keep class io.nekohasekai.warpcore.** { *; }
+-dontwarn io.nekohasekai.warpcore.**
 
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses

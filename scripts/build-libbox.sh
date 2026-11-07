@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Build libbox.aar locally (what the CI job "libbox" does on GitHub runners).
-# Requirements: go 1.23+, gomobile, Android SDK + NDK, JAVA 17.
+# Build the COMBINED core aar locally (what the CI job "core" does):
+# sing-box libbox + the vendored WARP-over-MASQUE engine, bound together into
+# ONE aar (one go.Seq runtime — two aars collide, see third_party/corebind/doc.go).
+# Requirements: go 1.26+ (bind) and go 1.24 (to install gomobile), Android SDK + NDK, JAVA 17.
 set -euo pipefail
 
 SINGBOX_VERSION="${SINGBOX_VERSION:-v1.11.15}"
@@ -8,27 +10,34 @@ ABIS="${ABIS:-arm64-v8a,armeabi-v7a,x86_64}"
 
 command -v go >/dev/null || { echo "go is missing"; exit 1; }
 [ -n "${ANDROID_HOME:-}" ] || [ -n "${ANDROID_SDK_ROOT:-}" ] || { echo "ANDROID_HOME is missing"; exit 1; }
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# gomobile v0.1.4 pulls x/tools v0.16.0 which does not compile under go >= 1.25;
+# install the tools with 1.24 (or any go < 1.25) if the default go is newer.
+if [ -z "${GOMOBILE_INSTALLED:-}" ]; then
+  go install -v github.com/sagernet/gomobile/cmd/gomobile@v0.1.4
+  go install -v github.com/sagernet/gomobile/cmd/gobind@v0.1.4
+fi
+export PATH="$PATH:$(go env GOPATH)/bin"
 
-git clone --depth 1 --branch "$SINGBOX_VERSION" https://github.com/SagerNet/sing-box "$WORK/sing-box"
-cd "$WORK/sing-box"
-
-go install golang.org/x/mobile/cmd/gomobile@latest
-go install golang.org/x/mobile/cmd/gobind@latest
-gomobile init
+cd "$REPO/third_party/corebind"
+go mod tidy
+go get github.com/sagernet/gomobile@v0.1.4
+go mod download github.com/sagernet/gomobile
 
 gomobile bind \
-  -o libbox.aar \
+  -o warpcore.aar \
   -target=android \
   -androidapi 24 \
-  -javapkg=io.nekohasekai.libbox \
   -abis "$ABIS" \
-  -tags "with_quic,with_wireguard,with_gvisor,with_utls,with_clash_api" \
-  ./experimental/libbox
+  -javapkg=io.nekohasekai \
+  -libname=kuku \
+  -trimpath \
+  -buildvcs=false \
+  -ldflags "-X github.com/sagernet/sing-box/constant.Version=${SINGBOX_VERSION} -s -w -buildid=" \
+  -tags "with_gvisor,with_quic,with_wireguard,with_ech,with_utls,with_clash_api" \
+  github.com/sagernet/sing-box/experimental/libbox github.com/Diniboy1123/usque/mobile
 
-OUT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-mkdir -p app/libs
-cp libbox.aar "$(pwd)/app/libs/libbox.aar" 2>/dev/null || cp libbox.aar "$OLDPWD/app/libs/libbox.aar" || true
-echo "done → app/libs/libbox.aar (copy it to your kuku-vpn checkout if the path differs)"
+mkdir -p "$REPO/app/libs"
+cp warpcore.aar "$REPO/app/libs/warpcore.aar"
+echo "done → app/libs/warpcore.aar (combined libbox + warpcore)"

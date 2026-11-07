@@ -79,11 +79,12 @@ android {
 }
 
 dependencies {
-    // libbox (sing-box core) — produced by .github/workflows/android.yml (job: libbox)
-    // or scripts/build-libbox.sh locally. Never committed to git.
-    implementation(files("libs/libbox.aar"))
-    // warpcore (Cloudflare WARP over MASQUE engine) — produced by the
-    // warpcore CI job from third_party/warpcore. Never committed to git.
+    // kuku-core: ONE combined gomobile aar produced by CI (job "core") that
+    // binds BOTH engines — sing-box libbox (io.nekohasekai.libbox.*) and the
+    // WARP-over-MASQUE engine (io.nekohasekai.warpcore.*). A single aar is
+    // mandatory: every gomobile aar embeds its own go.Seq runtime, and two
+    // aars collide (duplicate go.Seq) or cross-wire two Go runtimes.
+    // Never committed to git.
     implementation(files("libs/warpcore.aar"))
 
     // Compose (Material 3)
