@@ -2,6 +2,11 @@
 -keep class io.nekohasekai.libbox.** { *; }
 -dontwarn io.nekohasekai.libbox.**
 
+# Keep warpcore (gomobile, WARP-over-MASQUE engine) the same way: the Go side
+# reaches the generated Java glue over JNI and Kotlin calls Warpcore.* by name.
+-keep class app.kukuvpn.warpcore.** { *; }
+-dontwarn app.kukuvpn.warpcore.**
+
 # kotlinx.serialization
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt

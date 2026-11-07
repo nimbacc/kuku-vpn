@@ -191,13 +191,23 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             val isMasque = candidate.type == ProfileType.WIREGUARD &&
                 candidate.transport.startsWith("masque")
             if (isMasque) {
-                ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
-                WarpMasqueEngine.ensureRegistered(this)
-                WarpMasqueEngine.start(
-                    this,
-                    useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
-                ) // blocking; throws with the engine's real error on failure
-                ServiceBridge.log("INFO", "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})")
+                // Registration/tunnel boot throws on failure (e.g. CF API
+                // unreachable) — treat it like any other candidate error and
+                // fall through to the next candidate instead of killing the
+                // whole connection chain.
+                try {
+                    ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
+                    WarpMasqueEngine.ensureRegistered(this)
+                    WarpMasqueEngine.start(
+                        this,
+                        useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
+                    ) // blocking; throws with the engine's real error on failure
+                    ServiceBridge.log("INFO", "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})")
+                } catch (e: Exception) {
+                    lastCandidateError = e.message
+                    ServiceBridge.log("ERROR", "${candidate.name}: MASQUE engine: ${e.message}")
+                    continue
+                }
             }
 
             // WARP candidates sweep every known anycast IP — the identity is
