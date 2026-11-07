@@ -197,12 +197,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 // whole connection chain.
                 try {
                     ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
+                    val bootStart = android.os.SystemClock.elapsedRealtime()
                     WarpMasqueEngine.ensureRegistered(this)
                     WarpMasqueEngine.start(
                         this,
                         useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
-                    ) // blocking; throws with the engine's real error on failure
-                    ServiceBridge.log("INFO", "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})")
+                    ) // blocking; sweeps endpoints, throws with the engine's real error on failure
+                    ServiceBridge.log(
+                        "INFO",
+                        "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}, " +
+                            "${android.os.SystemClock.elapsedRealtime() - bootStart}ms)"
+                    )
                 } catch (e: Exception) {
                     lastCandidateError = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: MASQUE engine: ${e.message}")

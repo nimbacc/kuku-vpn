@@ -104,11 +104,11 @@ object WarpRegistrar {
 
             else -> {
                 val additions = mutableListOf<Profile>()
-                if (existing.none { it.transport == TRANSPORT_MASQUE }) {
-                    additions += masqueProfile(context, TRANSPORT_MASQUE)
-                }
                 if (existing.none { it.transport == TRANSPORT_MASQUE_H2 }) {
                     additions += masqueProfile(context, TRANSPORT_MASQUE_H2)
+                }
+                if (existing.none { it.transport == TRANSPORT_MASQUE }) {
+                    additions += masqueProfile(context, TRANSPORT_MASQUE)
                 }
                 val missing = FALLBACK_PORTS.filter { port -> existing.none { it.port == port } }
                 if (missing.isNotEmpty()) {
@@ -118,9 +118,9 @@ object WarpRegistrar {
                 if (additions.isNotEmpty()) {
                     store.addAll(additions)
                     // A legacy install that never verified anything gets steered to
-                    // MASQUE — plain WireGuard is exactly what failed for it before.
+                    // MASQUE H2 — plain WireGuard is exactly what failed for it before.
                     if (store.lastGoodId.first() == null) {
-                        additions.firstOrNull { it.transport == TRANSPORT_MASQUE }?.let { store.select(it.id) }
+                        additions.firstOrNull { it.transport == TRANSPORT_MASQUE_H2 }?.let { store.select(it.id) }
                     }
                 }
                 _status.value = WarpSetup.READY
@@ -132,14 +132,18 @@ object WarpRegistrar {
         _status.value = WarpSetup.REGISTERING
         // MASQUE candidates come first and don't depend on the WireGuard
         // registration succeeding — the engine mints its own identity.
+        // H2 (TCP 443) is tried FIRST: on censorship-heavy networks (IR)
+        // QUIC/UDP is throttled while plain-TLS-to-Cloudflare usually passes,
+        // so the very first connect must attempt the most survivable path.
+        // After the first success the engine pins that profile via lastGood.
         val profiles = buildList {
-            add(masqueProfile(context, TRANSPORT_MASQUE))
             add(masqueProfile(context, TRANSPORT_MASQUE_H2))
+            add(masqueProfile(context, TRANSPORT_MASQUE))
             addAll(runCatching { registerAll(context) }.getOrDefault(emptyList()))
         }
         if (profiles.size >= 2) {
             store.addAll(profiles) // auto-selects when nothing is selected
-            store.select(profiles.first().id) // MASQUE H3 is the default path
+            store.select(profiles.first().id) // MASQUE H2 (TCP 443) is the default path
             _status.value = WarpSetup.READY
         } else {
             _status.value = WarpSetup.FAILED

@@ -13,6 +13,16 @@ import (
 	"github.com/Diniboy1123/usque/models"
 )
 
+// apiClient bounds every Cloudflare API call. http.DefaultClient has NO
+// timeout: on networks where the ISP blackholes api.cloudflareclient.com
+// (IR-style censorship) the request would hang FOREVER and, because these
+// calls are bound over gomobile and run on the app's connect thread, the
+// whole UI would stick at "Connecting" with no error at all. A bounded
+// client turns that hang into a fast, reported failure.
+var apiClient = &http.Client{
+	Timeout: 15 * time.Second,
+}
+
 // Register creates a new user account by registering a WireGuard public key and generating a random Android-like device identifier.
 // The WireGuard private key isn't stored anywhere, therefore it won't be usable. It's sole purpose is to mimic the Android app's registration process.
 //
@@ -86,7 +96,7 @@ func Register(model, locale, jwt string, acceptTos bool) (*models.AccountData, e
 		req.Header.Set("CF-Access-Jwt-Assertion", jwt)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
@@ -159,7 +169,7 @@ func EnrollKey(deviceId string, deviceToken string, pubKey []byte, deviceName st
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
@@ -209,7 +219,7 @@ func GetAccount(deviceId string, deviceToken string) (*models.Account, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}
@@ -269,7 +279,7 @@ func UpdateLicenceKey(deviceId string, deviceToken string, licenceKey string) er
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
 	}
@@ -309,7 +319,7 @@ func DeleteLicenceKey(deviceId string, deviceToken string) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
 	}
@@ -349,7 +359,7 @@ func GetDevices(deviceId string, deviceToken string) (*models.Devices, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+deviceToken)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %v", err)
 	}

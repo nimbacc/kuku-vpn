@@ -33,6 +33,7 @@ import (
 	"github.com/Diniboy1123/usque/api"
 	"github.com/Diniboy1123/usque/config"
 	"github.com/Diniboy1123/usque/internal"
+	"golang.zx2c4.com/wireguard/tun"
 	"golang.zx2c4.com/wireguard/tun/netstack"
 )
 
@@ -43,8 +44,59 @@ const (
 	defaultReconnect  = 1 * time.Second
 	defaultUDPTtl     = 60 * time.Second
 	defaultDNSTimeout = 2 * time.Second
-	readyTimeout      = 25 * time.Second
+	// per-endpoint budget inside the sweep: a healthy edge validates in
+	// well under 3s (real-world: 0.5-2s on mobile), so 7s is generous
+	// even on slow networks while keeping the whole sweep bounded.
+	defaultAttemptTimeout = 7 * time.Second
 )
+
+// sweepEndpointIPs — known-good WARP edges (anycast). MASQUE answers on
+// port 443 for BOTH HTTP/3 (UDP) and HTTP/2 (TCP). The first endpoint that
+// passes a real data-plane check wins; anything blocked by the ISP simply
+// burns its slot and the sweep moves on.
+var sweepEndpointIPs = []string{
+	"162.159.198.1", "162.159.192.1", "162.159.193.1",
+	"188.114.96.1", "188.114.97.1", "162.159.195.1",
+}
+
+// endpointCandidates returns the ordered endpoint list for the sweep: the
+// configured/registered endpoint first (it is what the official client
+// uses), then the sweep list. Each candidate is validated with a REAL
+// round-trip before it is accepted — Aether's rule: "a gateway is trusted
+// once it actually passes traffic, not just when it answers the handshake".
+func endpointCandidates(useHTTP2 bool) []net.Addr {
+	seen := map[string]bool{}
+	ips := make([]string, 0, len(sweepEndpointIPs)+2)
+	add := func(ip string) {
+		if ip == "" || seen[ip] {
+			return
+		}
+		seen[ip] = true
+		ips = append(ips, ip)
+	}
+	if useHTTP2 {
+		add(config.AppConfig.EndpointH2V4)
+		add(config.DefaultEndpointH2V4)
+	} else {
+		add(config.AppConfig.EndpointV4)
+	}
+	for _, ip := range sweepEndpointIPs {
+		add(ip)
+	}
+	addrs := make([]net.Addr, 0, len(ips))
+	for _, ip := range ips {
+		parsed := net.ParseIP(ip)
+		if parsed == nil {
+			continue
+		}
+		if useHTTP2 {
+			addrs = append(addrs, &net.TCPAddr{IP: parsed, Port: 443})
+		} else {
+			addrs = append(addrs, &net.UDPAddr{IP: parsed, Port: 443})
+		}
+	}
+	return addrs
+}
 
 var (
 	mu        sync.Mutex // guards stopFn/doneCh/server handle swap
@@ -156,11 +208,6 @@ func Start(configDir string, port int, useHTTP2 bool) error {
 		return fmt.Errorf("tls config: %w", err)
 	}
 
-	endpoint, err := config.SelectEndpointFromConfig(useHTTP2, false, 443)
-	if err != nil {
-		return fmt.Errorf("select endpoint: %w", err)
-	}
-
 	localAddresses := []netip.Addr{}
 	if v4, err := netip.ParseAddr(config.AppConfig.IPv4); err == nil {
 		localAddresses = append(localAddresses, v4)
@@ -173,50 +220,76 @@ func Start(configDir string, port int, useHTTP2 bool) error {
 		netip.MustParseAddr("149.112.112.112"),
 	}
 
-	tunDev, tunNet, err := netstack.CreateNetTUN(localAddresses, dnsAddrs, defaultMTU)
-	if err != nil {
-		return fmt.Errorf("create netstack: %w", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	setStop := func() { cancel() }
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 	mu.Lock()
-	stopFn = setStop
+	stopFn = func() { rootCancel() }
 	mu.Unlock()
 
-	go api.MaintainTunnel(ctx, api.MaintainTunnelConfig{
-		TLSConfig:         tlsConfig,
-		KeepalivePeriod:   defaultKeepalive,
-		InitialPacketSize: 0,
-		Endpoint:          endpoint,
-		Device:            api.NewNetstackAdapter(tunDev),
-		MTU:               defaultMTU,
-		ReconnectDelay:    defaultReconnect,
-		AlwaysReconnect:   true,
-		UseHTTP2:          useHTTP2,
-	})
-
-	// Gate the SOCKS listener on a real round-trip through the tunnel, so
-	// "Start returned nil" always means "traffic can flow" for the caller.
-	ready := false
-	deadline := time.Now().Add(readyTimeout)
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			_ = tunDev.Close()
-			return fmt.Errorf("engine stopped before ready")
+	// Aether-style endpoint sweep. Every candidate must PROVE itself with
+	// a real data-plane round-trip (a TCP dial to 1.1.1.1:53 through the
+	// tunnel) before the SOCKS listener is opened. A handshake alone
+	// proves nothing on hostile networks — the previous single-endpoint
+	// build came up "connected" on edges that then dropped every packet.
+	var (
+		ctx      context.Context
+		cancel   context.CancelFunc
+		tunDev   tun.Device
+		tunNet   *netstack.Net
+		endpoint net.Addr
+		lastErr  error
+	)
+	candidates := endpointCandidates(useHTTP2)
+	for i, ep := range candidates {
+		if rootCtx.Err() != nil {
+			return fmt.Errorf("engine stopped during endpoint sweep")
 		}
-		testConn, dialErr := tunNet.DialContext(ctx, "tcp", net.JoinHostPort("1.1.1.1", "53"))
-		if dialErr == nil {
-			_ = testConn.Close()
-			ready = true
+		attemptCtx, attemptCancel := context.WithCancel(rootCtx)
+		attemptTun, attemptNet, err := netstack.CreateNetTUN(localAddresses, dnsAddrs, defaultMTU)
+		if err != nil {
+			attemptCancel()
+			return fmt.Errorf("create netstack: %w", err)
+		}
+		go api.MaintainTunnel(attemptCtx, api.MaintainTunnelConfig{
+			TLSConfig:         tlsConfig,
+			KeepalivePeriod:   defaultKeepalive,
+			InitialPacketSize: 0,
+			Endpoint:          ep,
+			Device:            api.NewNetstackAdapter(attemptTun),
+			MTU:               defaultMTU,
+			ReconnectDelay:    defaultReconnect,
+			AlwaysReconnect:   true,
+			UseHTTP2:          useHTTP2,
+		})
+		started := time.Now()
+		attemptDeadline := started.Add(defaultAttemptTimeout)
+		won := false
+		for time.Now().Before(attemptDeadline) {
+			if rootCtx.Err() != nil || attemptCtx.Err() != nil {
+				break
+			}
+			testConn, dialErr := attemptNet.DialContext(attemptCtx, "tcp", net.JoinHostPort("1.1.1.1", "53"))
+			if dialErr == nil {
+				_ = testConn.Close()
+				won = true
+				break
+			}
+			time.Sleep(400 * time.Millisecond)
+		}
+		if won {
+			ctx, cancel, tunDev, tunNet, endpoint = attemptCtx, attemptCancel, attemptTun, attemptNet, ep
+			log.Printf("warpcore: endpoint %s validated in %s (tried %d/%d)",
+				ep, time.Since(started).Round(time.Millisecond), i+1, len(candidates))
 			break
 		}
-		time.Sleep(400 * time.Millisecond)
+		attemptCancel()
+		_ = attemptTun.Close()
+		lastErr = fmt.Errorf("endpoint %s: no traffic within %s", ep, defaultAttemptTimeout)
+		log.Printf("warpcore: %v — next endpoint", lastErr)
 	}
-	if !ready {
-		cancel()
-		_ = tunDev.Close()
-		return fmt.Errorf("tunnel did not come up within %s (http2=%v)", readyTimeout, useHTTP2)
+	if tunDev == nil {
+		rootCancel()
+		return fmt.Errorf("tunnel did not come up on any of %d endpoint(s) (http2=%v): last: %v",
+			len(candidates), useHTTP2, lastErr)
 	}
 
 	resolver := &internal.TunnelDNSResolver{
