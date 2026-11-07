@@ -182,6 +182,7 @@ jobs:
 
       - name: build provenance attestation (forks of this repo fail this check by design)
         if: github.event_name == 'push'
+        continue-on-error: true # attestation is best-effort; never block the APK upload
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/*.apk
