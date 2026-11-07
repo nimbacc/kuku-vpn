@@ -10,8 +10,11 @@ import android.net.IpPrefix
 import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService as AndroidVpnService
 import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.OsConstants
@@ -79,7 +82,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         private const val CHANNEL_ID = "tunnel"
         private const val CORE_NOTIF_CHANNEL = "core"
         private const val NOTIF_ID = 100
-        private const val MAX_CANDIDATES = 6
+        // 6 auto WARP profiles (2 MASQUE + 4 WireGuard ports) + a user profile
+        // and its last-good fallback must all fit in one chain
+        private const val MAX_CANDIDATES = 8
 
         /**
          * Cloudflare WARP anycast IPs. ISPs in Iran filter them selectively
@@ -106,6 +111,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
     private var boxService: BoxService? = null
     private var tunPfd: ParcelFileDescriptor? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var callbackThread: HandlerThread? = null
 
     /** Core → app service callbacks. Only these four exist in libbox 1.11.x. */
     private val serverHandler = object : CommandServerHandler {
@@ -180,6 +186,12 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
 
         var lastCandidateError: String? = null
+        // After the first plain-WireGuard WARP candidate has swept every
+        // anycast IP, the remaining port variants reuse the SAME identity —
+        // they only try their own port on the registered endpoint instead of
+        // repeating the whole sweep (cuts the worst-case dead-ISP wait from
+        // ~5 minutes to under a minute).
+        var warpWgSwept = false
         for (candidate in chain) {
             if (stopping.get()) return
             ServiceBridge.activeProfile.value = candidate
@@ -217,9 +229,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
             // WARP candidates sweep every known anycast IP — the identity is
             // identical, only the UDP endpoint changes, so no re-registration.
-            val endpoints = if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE && !isMasque)
-                (listOf(candidate.host) + WARP_ENDPOINT_IPS).distinct()
-            else listOf(candidate.host)
+            val endpoints = if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE && !isMasque) {
+                if (warpWgSwept) listOf(candidate.host)
+                else (listOf(candidate.host) + WARP_ENDPOINT_IPS).distinct()
+            } else listOf(candidate.host)
 
             var lastError: Exception? = null
             for (ip in endpoints) {
@@ -234,9 +247,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     ServiceBridge.lit(TunnelStage.LISTENER)
 
                     ServiceBridge.state.value = TunnelState.VERIFYING
-                    // tries=1 → fast sweep (each probe still hits 2 HTTPS URLs);
-                    // a false negative just moves on to the next endpoint.
-                    val verdict = ConnectionVerifier.verify(tries = 1)
+                    // sweep-optimised probe: one HTTPS request, tight timeouts
+                    // (worst case ≈5s per dead endpoint instead of ≈13s)
+                    val verdict = ConnectionVerifier.verifySweep()
                     if (!verdict.ok) error("verification failed: ${verdict.reason}")
 
                     ServiceBridge.lit(TunnelStage.TUNNEL)
@@ -264,6 +277,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     stopCore()
                 }
             }
+            if (candidate.fromSubscription == WarpRegistrar.WARP_SOURCE && !isMasque) warpWgSwept = true
             lastCandidateError = lastError?.message
         }
 
@@ -354,17 +368,15 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         scope.launch {
             stopCore()
             WarpMasqueEngine.stop()
-            // Kill-switch behaviour: if a tunnel was actually established and
-            // the user wants protection, the VPN interface stays up so traffic
-            // blackholes instead of leaking. Only the notification changes.
-            if (!settings.killSwitch || tunPfd == null || !settings.vpnMode) {
-                withContext(Dispatchers.Main) {
-                    startNotif(getString(R.string.state_error), ongoing = false)
-                    ServiceCompat.stopForeground(this@KukuVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
-            } else {
-                startNotif(getString(R.string.notif_kill_switch), ongoing = true)
+            // NOTE on kill switch: a failure tears the core (and with it the
+            // tun interface) down completely, so there is no blackhole left to
+            // hold. The old build showed a fake "kill switch active"
+            // notification while traffic actually flowed direct — the ERROR
+            // state is surfaced honestly instead.
+            withContext(Dispatchers.Main) {
+                startNotif(getString(R.string.state_error), ongoing = false)
+                ServiceCompat.stopForeground(this@KukuVpnService, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf()
             }
         }
     }
@@ -378,6 +390,13 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 .onFailure { ServiceBridge.log("WARN", "close core: ${it.message}") }
             runCatching { Seq.destroyRef(service.refnum) }
         }
+        // The tun fd belongs to the VpnService created in openTun(). libbox
+        // closes it in service.close(), but if that ever fails the stale
+        // interface (tun14/tun16…) keeps routing 0.0.0.0/0 into a dead core and
+        // poisons the network monitor — close our handle too (double-close is
+        // harmless).
+        tunPfd?.let { runCatching { it.close() } }
+        tunPfd = null
         // NOTE: the MASQUE engine is intentionally NOT stopped here —
         // startCore() calls this first and the engine must outlive it.
     }
@@ -474,6 +493,13 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         applySplitTunnel(builder)
         applyCoreSplitTunnel(builder, options)
 
+        // Release the previous interface BEFORE creating a new one: a leaked fd
+        // keeps the old tun alive next to the new one (tun14 + tun16 coexisting
+        // was observed in the field) and the stale entry corrupts the network
+        // monitor's view of the world.
+        tunPfd?.let { runCatching { it.close() } }
+        tunPfd = null
+
         val pfd = builder.establish()
             ?: error("android: the application is not prepared or is revoked")
         tunPfd = pfd
@@ -540,12 +566,41 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
     }
 
+    /** "tun0", "tun14"… — VPN interfaces are never valid dial targets. */
+    private fun isVpnInterfaceName(name: String): Boolean {
+        val n = name.lowercase()
+        return n.startsWith("tun") || n.startsWith("tap")
+    }
+
+    /** Best non-VPN network right now (wifi/ethernet preferred over cellular). */
+    private fun bestUnderlyingNetwork(): Network? {
+        val cm = getSystemService(ConnectivityManager::class.java)
+        return cm.allNetworks
+            .mapNotNull { net -> cm.getNetworkCapabilities(net)?.let { net to it } }
+            .filterNot { (_, caps) -> caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) }
+            .filter { (_, caps) -> caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) }
+            .maxByOrNull { (_, caps) -> when {
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
+                caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 2
+                else -> 1
+            } }
+            ?.first
+    }
+
     private fun notifyDefaultInterface(listener: InterfaceUpdateListener, network: Network) {
         val cm = getSystemService(ConnectivityManager::class.java)
+        val caps = cm.getNetworkCapabilities(network)
+        // THE critical guard (field-verified, run #17 logs): since Android P,
+        // registerDefaultNetworkCallback reports the VPN's own tun as the
+        // "default network". If the tun is ever reported, libbox treats it as
+        // the default interface, outbound sockets dial into the tunnel itself
+        // and the whole core blackholes ("updated default interface tun14",
+        // "no available network interface", DNS timeouts, eternal CONNECTING).
+        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return
         val lp = cm.getLinkProperties(network) ?: return
         val name = lp.interfaceName ?: return
+        if (isVpnInterfaceName(name)) return
         val nif = runCatching { JNetworkInterface.getByName(name) }.getOrNull() ?: return
-        val caps = cm.getNetworkCapabilities(network)
         listener.updateDefaultInterface(
             name,
             nif.index,
@@ -554,16 +609,48 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         )
     }
 
+    /**
+     * Same contract as the official client (DefaultNetworkListener): track the
+     * real UNDERLYING default network, never the VPN's own interface.
+     *
+     *  - API 31+ : registerBestMatchingNetworkCallback (REQUEST semantics —
+     *              excludes the VPN network)
+     *  - API 28-30: requestNetwork (same, and registerDefaultNetworkCallback
+     *              returns the VPN since P — see notifyDefaultInterface)
+     *  - API 24-27: registerDefaultNetworkCallback (pre-P it never reports VPN)
+     */
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
+        closeDefaultInterfaceMonitor(listener) // defensive: no double registration across core restarts
         val cm = getSystemService(ConnectivityManager::class.java)
+        val thread = HandlerThread("kuku-netmon").also { it.start() }
+        callbackThread = thread
+        val handler = Handler(thread.looper)
+        val request = NetworkRequest.Builder().apply {
+            addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+        }.build()
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) = notifyDefaultInterface(listener, network)
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+                notifyDefaultInterface(listener, network)
             override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) =
                 notifyDefaultInterface(listener, network)
         }
         networkCallback = cb
-        runCatching { cm.registerDefaultNetworkCallback(cb) }
-        cm.activeNetwork?.let { notifyDefaultInterface(listener, it) }
+        runCatching {
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+                    cm.registerBestMatchingNetworkCallback(request, cb, handler)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ->
+                    cm.requestNetwork(request, cb, handler)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ->
+                    cm.registerDefaultNetworkCallback(cb, handler)
+                else ->
+                    cm.registerDefaultNetworkCallback(cb)
+            }
+        }.onFailure { ServiceBridge.log("WARN", "net monitor register: ${it.message}") }
+        // immediate initial value — the callbacks correct it within milliseconds
+        bestUnderlyingNetwork()?.let { notifyDefaultInterface(listener, it) }
     }
 
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
@@ -571,6 +658,8 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(cb) }
         }
         networkCallback = null
+        callbackThread?.quitSafely()
+        callbackThread = null
     }
 
     override fun getInterfaces(): NetworkInterfaceIterator {
@@ -578,9 +667,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         val javaInterfaces = JNetworkInterface.getNetworkInterfaces()?.toList() ?: emptyList()
         val interfaces = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
         for (network in cm.allNetworks) {
-            val lp = cm.getLinkProperties(network) ?: continue
             val caps = cm.getNetworkCapabilities(network) ?: continue
+            // our own tun (and any other VPN) must never appear as an
+            // "available network" — a stale tun14/tun16 in this list is what
+            // produced "no available network interface" in the field
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+            val lp = cm.getLinkProperties(network) ?: continue
             val name = lp.interfaceName ?: continue
+            if (isVpnInterfaceName(name)) continue
             val jif = javaInterfaces.firstOrNull { it.name == name } ?: continue
             val box = io.nekohasekai.libbox.NetworkInterface()
             box.name = name

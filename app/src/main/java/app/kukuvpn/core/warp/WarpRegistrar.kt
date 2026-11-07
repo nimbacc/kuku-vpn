@@ -117,9 +117,17 @@ object WarpRegistrar {
                 }
                 if (additions.isNotEmpty()) {
                     store.addAll(additions)
-                    // A legacy install that never verified anything gets steered to
-                    // MASQUE H2 — plain WireGuard is exactly what failed for it before.
-                    if (store.lastGoodId.first() == null) {
+                    // Steering rule for legacy installs: if nothing ever verified,
+                    // OR the last-good profile is a plain WireGuard WARP endpoint
+                    // (the exact path hostile ISPs filter), selection moves to
+                    // MASQUE H2 so the very next connect takes the survivable path.
+                    val lastGood = store.lastGoodId.first()?.let { id ->
+                        store.snapshot().firstOrNull { it.id == id }
+                    }
+                    val lastGoodIsPlainWgWarp = lastGood != null &&
+                        lastGood.fromSubscription == WARP_SOURCE &&
+                        !lastGood.transport.startsWith(TRANSPORT_MASQUE)
+                    if (store.lastGoodId.first() == null || lastGoodIsPlainWgWarp) {
                         additions.firstOrNull { it.transport == TRANSPORT_MASQUE_H2 }?.let { store.select(it.id) }
                     }
                 }

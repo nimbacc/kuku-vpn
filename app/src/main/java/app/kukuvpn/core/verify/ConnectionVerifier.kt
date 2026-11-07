@@ -49,6 +49,13 @@ object ConnectionVerifier {
         .callTimeout(6, TimeUnit.SECONDS)
         .build()
 
+    /** Tighter client for endpoint sweeps — a dead endpoint must cost ≈5s, not ≈13s. */
+    private val sweepClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(5, TimeUnit.SECONDS)
+        .build()
+
     fun verify(tries: Int = 2): Verdict {
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT))
         var lastReason = "unknown"
@@ -85,6 +92,31 @@ object ConnectionVerifier {
 
     /** One shot check used while a tunnel is running (menu → test again). */
     fun quickCheck(): Boolean = verify(tries = 1).ok
+
+    /**
+     * Single-probe, single-attempt check for the endpoint sweep. Every dead
+     * endpoint costs one DNS-failure cycle through the core (~5s worst case
+     * with [sweepClient]) instead of two full probes (~13s) — across a
+     * 5-endpoint sweep that is the difference between "connecting" for 25s
+     * and for 65s.
+     */
+    fun verifySweep(): Verdict {
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT))
+        val started = System.currentTimeMillis()
+        return try {
+            sweepClient.newBuilder().proxy(proxy).build().newCall(
+                Request.Builder().url(PROBES[0].url).build()
+            ).execute().use { resp ->
+                if (resp.code == 204) {
+                    Verdict(true, fetchExitIp(proxy), System.currentTimeMillis() - started)
+                } else {
+                    Verdict(false, reason = "probe ${resp.code} ${PROBES[0].url.removePrefix("https://").substringBefore('/')}")
+                }
+            }
+        } catch (e: Exception) {
+            Verdict(false, reason = e.message ?: "probe failed")
+        }
+    }
 
     private fun fetchExitIp(proxy: Proxy): String = runCatching {
         probeClient.newBuilder().proxy(proxy).build().newCall(
