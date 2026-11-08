@@ -73,10 +73,10 @@ object WarpMasqueEngine {
      * second caller awaits the first, then REUSES the running engine when the
      * mode matches; an H2↔H3 mismatch stops and boots the requested mode.
      *
-     * The engine's endpoint sweep is hard-bounded on the Go side (~7s per
-     * endpoint, ≤~55s total including the listener probe). [onTick] fires
-     * every ~5s meanwhile so the log shows progress instead of a silent
-     * minute — the "frozen on booting engine" report.
+     * The engine's endpoint sweep is hard-bounded on the Go side and RACED
+     * in waves of 4 (v1.2.5): ≤~20s worst case, ~2-5s typical, hard cap 45s.
+     * [onTick] fires every ~5s meanwhile so the log shows progress instead
+     * of a silent minute — the "frozen on booting engine" report.
      */
     suspend fun boot(
         context: Context,

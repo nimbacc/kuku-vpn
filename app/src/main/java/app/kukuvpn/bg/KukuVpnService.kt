@@ -235,9 +235,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     // v1.2.4: single-flight boot shared with the app-open
                     // prewarm — a tap while the prewarm sweep is running now
                     // WAITS for it instead of colliding with the engine's
-                    // "already running" guard. The sweep itself is hard-bounded
-                    // in the engine (~7s per endpoint) and onTick keeps the log
-                    // alive so a slow cold boot never looks frozen again.
+                    // "already running" guard. v1.2.5: the engine RACES its
+                    // endpoints in waves of 4 (≤~20s worst, ~2-5s typical) and
+                    // onTick keeps the log alive so a slow cold boot never
+                    // looks frozen again.
                     WarpMasqueEngine.boot(
                         this,
                         useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
@@ -254,7 +255,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     continue
                 }
             }
-            // a cancel that landed during the (blocking, up to ~30s) engine
+            // a cancel that landed during the (blocking, ≤~20s) engine
             // boot must not march on into a doomed core start
             if (stopping.get()) return
 

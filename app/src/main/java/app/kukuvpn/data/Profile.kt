@@ -58,15 +58,23 @@ data class Profile(
     @SerialName("fromSubscription") val fromSubscription: String = "",
     @SerialName("createdAt") val createdAt: Long = System.currentTimeMillis(),
 ) {
-    /** Short summary shown in the profile list, e.g. "VLESS · reality · example.com:443". */
+    /** Short summary shown in the profile list and connection logs, e.g. "VLESS · reality · example.com:443". */
     fun summary(): String {
+        // literals mirror WarpRegistrar constants (kept here to avoid a data↔core cycle)
         val sec = when (type) {
             ProfileType.VLESS, ProfileType.TROJAN, ProfileType.VMESS ->
                 security.ifBlank { if (port == 443) "tls?" else "tcp" }
             ProfileType.SHADOWSOCKS -> method.ifBlank { "ss" }
             ProfileType.HYSTERIA2 -> if (obfs.isNotBlank()) "obfs" else "quic"
             ProfileType.TUIC -> congestionControl
-            ProfileType.WIREGUARD -> "wg"
+            // v1.2.5 bug: the auto WARP profiles are type WIREGUARD, so every
+            // MASQUE candidate logged "wireguard · wg · 127.0.0.1:2085" even
+            // while the MASQUE engine was booting — misleading in user logs.
+            ProfileType.WIREGUARD -> when {
+                transport == "masque-h2" -> "masque-h2/tcp"
+                transport == "masque" -> "masque-h3/udp"
+                else -> "wg"
+            }
             ProfileType.SSH -> "ssh"
         }
         return "${type.name.lowercase()} · $sec · $host:$port"
