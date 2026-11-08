@@ -262,21 +262,67 @@ func Start(configDir string, port int, useHTTP2 bool) error {
 		})
 		started := time.Now()
 		attemptDeadline := started.Add(defaultAttemptTimeout)
+
+		// BUG HISTORY (v1.2.4): the old loop only checked the clock BETWEEN
+		// dials, but one netstack TCP dial answered with ISP silence (dropped
+		// SYNs, no RST) blocked far past the 7s budget — the whole sweep went
+		// silent for minutes and the UI looked frozen ("first connect never
+		// comes up; only after killing and reopening the app"). Each dial now
+		// races a hard timer for the REMAINING budget; on timeout the attempt
+		// context is cancelled so the dial and the tunnel goroutine unwind.
+		// Fast dial failures still retry after 400ms (the tunnel needs a
+		// moment to handshake), so behavior is preserved — only the unbounded
+		// hang is gone. Worst case is now exactly 7s per endpoint.
 		won := false
+	attemptLoop:
 		for time.Now().Before(attemptDeadline) {
 			if rootCtx.Err() != nil || attemptCtx.Err() != nil {
 				break
 			}
-			testConn, dialErr := attemptNet.DialContext(attemptCtx, "tcp", net.JoinHostPort("1.1.1.1", "53"))
-			if dialErr == nil {
-				_ = testConn.Close()
-				won = true
-				break
+			dialDone := make(chan bool, 1)
+			go func() {
+				testConn, dialErr := attemptNet.DialContext(attemptCtx, "tcp", net.JoinHostPort("1.1.1.1", "53"))
+				if dialErr == nil {
+					_ = testConn.Close()
+				}
+				dialDone <- dialErr == nil
+			}()
+			timer := time.NewTimer(time.Until(attemptDeadline))
+			select {
+			case w := <-dialDone:
+				timer.Stop()
+				if w {
+					won = true
+					break attemptLoop
+				}
+			case <-timer.C:
+				attemptCancel() // hard stop: unblock hanging dial + MaintainTunnel
+				break attemptLoop
 			}
 			time.Sleep(400 * time.Millisecond)
 		}
 		if won {
 			ctx, cancel, tunDev, tunNet, endpoint = attemptCtx, attemptCancel, attemptTun, attemptNet, ep
+			// Remember the winner so the NEXT Start() validates it first
+			// (~1-2s instead of a fresh sweep) — Aether's "quick-reconnect to
+			// the last known-good gateway". Saved per transport: H3 winner in
+			// EndpointV4, H2 winner in EndpointH2V4; endpointCandidates()
+			// already puts the stored endpoint at the front of the sweep.
+			var ip string
+			switch a := ep.(type) {
+			case *net.UDPAddr:
+				ip = a.IP.String()
+			case *net.TCPAddr:
+				ip = a.IP.String()
+			}
+			if ip != "" {
+				if useHTTP2 {
+					config.AppConfig.EndpointH2V4 = ip
+				} else {
+					config.AppConfig.EndpointV4 = ip
+				}
+				_ = config.AppConfig.SaveConfig(configPath(configDir))
+			}
 			log.Printf("warpcore: endpoint %s validated in %s (tried %d/%d)",
 				ep, time.Since(started).Round(time.Millisecond), i+1, len(candidates))
 			break

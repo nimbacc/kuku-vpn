@@ -232,11 +232,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 try {
                     ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
                     val bootStart = android.os.SystemClock.elapsedRealtime()
-                    WarpMasqueEngine.ensureRegistered(this)
-                    WarpMasqueEngine.start(
+                    // v1.2.4: single-flight boot shared with the app-open
+                    // prewarm — a tap while the prewarm sweep is running now
+                    // WAITS for it instead of colliding with the engine's
+                    // "already running" guard. The sweep itself is hard-bounded
+                    // in the engine (~7s per endpoint) and onTick keeps the log
+                    // alive so a slow cold boot never looks frozen again.
+                    WarpMasqueEngine.boot(
                         this,
                         useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
-                    ) // blocking; sweeps endpoints, throws with the engine's real error on failure
+                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+                    ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
                         "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}, " +
@@ -339,7 +345,15 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
     private suspend fun buildChain(): List<Profile> {
         val selectedId = profileStore.selectedId.first()
-        return if (settings.autoFallback) {
+        // v1.2.4: the auto-managed WARP family is ONE method with several
+        // transports — always rank it (H2/TCP first, then H3/UDP, then the WG
+        // ports), even when autoFallback is off: picking "Cloudflare WARP
+        // (Free)" selects the method, not a specific UDP-vs-TCP wire format.
+        // User-imported profiles keep strict autoFallback semantics.
+        val selectedIsWarp = profileStore.snapshot()
+            .firstOrNull { it.id == selectedId }
+            ?.fromSubscription == WarpRegistrar.WARP_SOURCE
+        return if (settings.autoFallback || selectedIsWarp) {
             FallbackEngine(profileStore).chain(selectedId, maxCandidates = MAX_CANDIDATES)
         } else {
             profileStore.snapshot().filter { it.id == selectedId }
