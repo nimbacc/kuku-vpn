@@ -51,7 +51,7 @@ class KukuApp : Application() {
      * WarpMasqueEngine.boot() is single-flight so a tap during the prewarm
      * simply waits for it.
      */
-    private fun prewarmEngine() {
+    private suspend fun prewarmEngine() {
         runCatching {
             if (ServiceBridge.state.value != TunnelState.OFF) return
             val hasMasque = profileStore.snapshot().any {
