@@ -147,8 +147,21 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> scope.launch { stopTunnel(clean = true) }
+        if (intent == null) {
+            // START_STICKY restart after the system killed the process: the
+            // core died with it, so "reconnecting" here would only show a
+            // ghost CONNECTING state with the app closed. Let it go — the
+            // user reconnects with one tap.
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        when (intent.action) {
+            ACTION_STOP -> scope.launch {
+                // flip the UI first — teardown (core close + engine stop) can
+                // take seconds and the button must answer instantly
+                ServiceBridge.state.value = TunnelState.OFF
+                stopTunnel(clean = true)
+            }
             else -> scope.launch { runTunnel() }
         }
         return START_STICKY
@@ -192,6 +205,15 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         // repeating the whole sweep (cuts the worst-case dead-ISP wait from
         // ~5 minutes to under a minute).
         var warpWgSwept = false
+        // v1.2.3: the FIRST endpoint of the session is verified with the
+        // patient cold-start probe (2×8s). A warm path passes in ~4s, but the
+        // very first request also pays for WARP path setup and the first TLS
+        // handshakes — with the flat 5s sweep cap that attempt could marginally
+        // miss, the candidate got declared dead and the whole chain burned
+        // minutes on dead endpoints ("first connect never works; only after
+        // killing and reopening the app"). Every later endpoint keeps the
+        // tight sweep probe.
+        var coldEndpointPending = true
         for (candidate in chain) {
             if (stopping.get()) return
             ServiceBridge.activeProfile.value = candidate
@@ -226,6 +248,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     continue
                 }
             }
+            // a cancel that landed during the (blocking, up to ~30s) engine
+            // boot must not march on into a doomed core start
+            if (stopping.get()) return
 
             // WARP candidates sweep every known anycast IP — the identity is
             // identical, only the UDP endpoint changes, so no re-registration.
@@ -248,9 +273,19 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
                     ServiceBridge.state.value = TunnelState.VERIFYING
                     // sweep-optimised probe: one HTTPS request, tight timeouts
-                    // (worst case ≈5s per dead endpoint instead of ≈13s)
-                    val verdict = ConnectionVerifier.verifySweep()
-                    if (!verdict.ok) error("verification failed: ${verdict.reason}")
+                    // (worst case ≈5s per dead endpoint instead of ≈13s);
+                    // the session's FIRST endpoint uses the patient cold probe
+                    val verifyStart = android.os.SystemClock.elapsedRealtime()
+                    val verdict =
+                        if (coldEndpointPending) ConnectionVerifier.verifyCold()
+                        else ConnectionVerifier.verifySweep()
+                    coldEndpointPending = false
+                    if (!verdict.ok) {
+                        error(
+                            "verification failed: ${verdict.reason} " +
+                                "(after ${android.os.SystemClock.elapsedRealtime() - verifyStart}ms)"
+                        )
+                    }
 
                     ServiceBridge.lit(TunnelStage.TUNNEL)
                     ServiceBridge.lit(TunnelStage.EXIT)

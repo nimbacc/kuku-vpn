@@ -100,21 +100,49 @@ object ConnectionVerifier {
      * 5-endpoint sweep that is the difference between "connecting" for 25s
      * and for 65s.
      */
-    fun verifySweep(): Verdict {
+    fun verifySweep(): Verdict = singleProbe(sweepClient)
+
+    /**
+     * Cold-start verification (v1.2.3) for the FIRST endpoint of a session.
+     *
+     * BUG: the very first request through a freshly booted engine also pays
+     * for the WARP/MASQUE path setup and the first TLS handshakes; field logs
+     * show a warm probe at 3856ms — barely under the 5s sweep cap — so on a
+     * cold ISP route the first attempt tipped over 5s, the candidate was
+     * declared dead, and the whole fallback chain burned minutes on dead
+     * endpoints ("first connect never works; after killing and reopening the
+     * app it connects"). Two attempts with an 8s cap: a warm path still
+     * passes on the first try in ~4s, a cold one gets the grace it needs.
+     */
+    fun verifyCold(): Verdict {
+        val coldClient = probeClient.newBuilder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .callTimeout(8, TimeUnit.SECONDS)
+            .build()
+        var last = Verdict(false, reason = "unknown")
+        repeat(2) { attempt ->
+            last = singleProbe(coldClient, attemptTag = " (cold attempt ${attempt + 1})")
+            if (last.ok) return last
+        }
+        return last
+    }
+
+    private fun singleProbe(client: OkHttpClient, attemptTag: String = ""): Verdict {
         val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT))
         val started = System.currentTimeMillis()
         return try {
-            sweepClient.newBuilder().proxy(proxy).build().newCall(
+            client.newBuilder().proxy(proxy).build().newCall(
                 Request.Builder().url(PROBES[0].url).build()
             ).execute().use { resp ->
                 if (resp.code == 204) {
                     Verdict(true, fetchExitIp(proxy), System.currentTimeMillis() - started)
                 } else {
-                    Verdict(false, reason = "probe ${resp.code} ${PROBES[0].url.removePrefix("https://").substringBefore('/')}")
+                    Verdict(false, reason = "probe ${resp.code} ${PROBES[0].url.removePrefix("https://").substringBefore('/')}$attemptTag")
                 }
             }
         } catch (e: Exception) {
-            Verdict(false, reason = e.message ?: "probe failed")
+            Verdict(false, reason = "${e.message ?: "probe failed"}$attemptTag")
         }
     }
 

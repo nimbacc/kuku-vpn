@@ -104,6 +104,21 @@ object SingBoxConfigBuilder {
             add(buildJsonObject { put("type", "dns"); put("tag", "dns-out") })
         }
 
+        // BUG HISTORY (v1.2.3): the stats tiles always showed 0 B down/up even
+        // while the tunnel carried real traffic. In sing-box 1.11 traffic is
+        // counted ONLY by the clash-api TrafficManager — libbox's
+        // CommandServer.readStatus() reads clashServer.TrafficManager().Total()
+        // and with no clash_api in the config clashServer is nil, so the
+        // status/connections streams die instantly and every counter stays 0.
+        // An EMPTY clash_api block is enough: external_controller stays unset,
+        // so no TCP listener is opened (nothing exposed on localhost) — only
+        // the byte counters and the connections list come alive.
+        putJsonObject("experimental") {
+            putJsonObject("clash_api") {
+                put("default_mode", "Rule")
+            }
+        }
+
         putJsonObject("route") {
             putJsonArray("rules") {
                 add(buildJsonObject {

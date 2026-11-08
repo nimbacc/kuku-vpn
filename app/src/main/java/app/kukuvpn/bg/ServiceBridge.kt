@@ -28,11 +28,16 @@ import kotlinx.coroutines.flow.StateFlow
  * counters live on their own flow (the v1.0.7-style fix: a chatty stream must
  * never recompose the whole screen).
  *
- * Stats source in sing-box 1.11.x: there are NO uplink/downlink fields in
- * StatusMessage (those arrive in 1.12). Instead we run two libbox CommandClients:
- *  - CommandStatus     → connectionsIn/Out + memory, every statusInterval
- *  - CommandConnections → full connection list with per-connection
- *    uplinkTotal/downlinkTotal, summed here into session bytes.
+ * Stats source (v1.2.3, source-verified): libbox 1.11.15's StatusMessage DOES
+ * carry Uplink/Downlink/UplinkTotal/DownlinkTotal — CommandServer.readStatus()
+ * pulls them from the clash-api TrafficManager. Two requirements follow:
+ *  1. the config must ship `experimental.clash_api {}` (see SingBoxConfigBuilder):
+ *     without it clashServer is nil and the status stream dies instantly —
+ *     that was the real cause of the eternal 0 B tiles;
+ *  2. ONE CommandStatus client feeds everything (totals, per-second rates,
+ *     live connection count). The old second client on CommandConnections
+ *     summed per-connection uplink/downlink that the missing tracker never
+ *     filled — removed as dead weight.
  */
 object ServiceBridge {
 
@@ -85,7 +90,6 @@ object ServiceBridge {
     private val statsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var statusClient: CommandClient? = null
-    private var connectionsClient: CommandClient? = null
     private var sessionStartMs = 0L
 
     @Volatile private var totalsIn = 0L
@@ -98,17 +102,15 @@ object ServiceBridge {
         sessionStartMs = System.currentTimeMillis()
         totalsIn = 0; totalsOut = 0; connsIn = 0; connsOut = 0
         statusClient = connectClient(CommandStatusHandler())
-        connectionsClient = connectClient(CommandConnectionsHandler())
     }
 
     fun stopStatsClients() {
         destroyClient(statusClient); statusClient = null
-        destroyClient(connectionsClient); connectionsClient = null
     }
 
     private fun connectClient(handler: CommandClientHandler): CommandClient? {
         val options = CommandClientOptions().apply {
-            command = if (handler is CommandConnectionsHandler) Libbox.CommandConnections else Libbox.CommandStatus
+            command = Libbox.CommandStatus
             statusInterval = 1_000_000_000L // 1 second, in nanoseconds
         }
         val client = CommandClient(handler, options)
@@ -156,34 +158,12 @@ object ServiceBridge {
         override fun updateClashMode(newMode: String?) {}
 
         override fun writeStatus(message: StatusMessage) {
+            // session totals straight from the TrafficManager; Uplink/Downlink
+            // on the wire are per-second deltas the server already computed
+            ServiceBridge.totalsIn = message.downlinkTotal
+            ServiceBridge.totalsOut = message.uplinkTotal
             ServiceBridge.connsIn = message.connectionsIn
             ServiceBridge.connsOut = message.connectionsOut
-            ServiceBridge.pushStats()
-        }
-    }
-
-    private class CommandConnectionsHandler : CommandClientHandler {
-        override fun connected() {}
-        override fun disconnected(message: String?) {}
-        override fun clearLogs() {}
-        override fun writeLogs(messageList: StringIterator?) {}
-        override fun writeGroups(message: OutboundGroupIterator?) {}
-        override fun writeStatus(message: StatusMessage) {}
-        override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) {}
-        override fun updateClashMode(newMode: String?) {}
-
-        override fun writeConnections(message: Connections?) {
-            if (message == null) return
-            var din = 0L
-            var dout = 0L
-            val it = message.iterator()
-            while (it.hasNext()) {
-                val connection = it.next()
-                din += connection.downlinkTotal
-                dout += connection.uplinkTotal
-            }
-            ServiceBridge.totalsIn = din
-            ServiceBridge.totalsOut = dout
             ServiceBridge.pushStats()
         }
     }
