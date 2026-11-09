@@ -129,7 +129,9 @@ jobs:
           ndkbin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           cd /tmp/psiphon/ConsoleClient
           GOOS=android GOARCH=arm64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/arm64-v8a/libpsiphon.so" .
-          GOOS=android GOARCH=amd64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/x86_64/libpsiphon.so" .
+          # android/amd64 and android/arm BOTH require external (cgo) linking —
+          # only android/arm64 links internally (CI run #26 evidence)
+          GOOS=android GOARCH=amd64   CGO_ENABLED=1 CC="$ndkbin/x86_64-linux-android24-clang" go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/x86_64/libpsiphon.so" .
           GOOS=android GOARCH=arm     CGO_ENABLED=1 CC="$ndkbin/armv7a-linux-androideabi24-clang" go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/armeabi-v7a/libpsiphon.so" .
           ls -lh "$out"/*/
 
@@ -198,8 +200,9 @@ jobs:
           go get gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/main/client@v0.0.7
           for abi in arm64-v8a armeabi-v7a x86_64; do
             case "$abi" in
+              # only android/arm64 links internally; amd64/arm need the NDK clang
               arm64-v8a)   garch=arm64; cgo=0; cc="" ;;
-              x86_64)      garch=amd64; cgo=0; cc="" ;;
+              x86_64)      garch=amd64; cgo=1; cc="$ndkbin/x86_64-linux-android24-clang" ;;
               armeabi-v7a) garch=arm;   cgo=1; cc="$ndkbin/armv7a-linux-androideabi24-clang" ;;
             esac
             GOOS=android GOARCH=$garch CGO_ENABLED=$cgo CC="$cc" \
