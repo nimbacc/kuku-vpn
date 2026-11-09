@@ -30,6 +30,7 @@ import app.kukuvpn.R
 import app.kukuvpn.core.links.ShareLinkParser
 import app.kukuvpn.core.links.SubscriptionFetcher
 import app.kukuvpn.bg.ServiceBridge
+import app.kukuvpn.ui.screens.AboutScreen
 import app.kukuvpn.ui.screens.ConnectionScreen
 import app.kukuvpn.ui.screens.HomeScreen
 import app.kukuvpn.ui.screens.LogsScreen
@@ -107,8 +108,15 @@ fun KukuAppRoot() {
             composable("home") { HomeScreen() }
             composable("profiles") { ProfilesScreen(snackbar = snackbar) }
             composable("logs") { LogsScreen() }
-            composable("settings") { SettingsScreen(snackbar = snackbar, onOpenConnection = { nav.navigate("connection") { launchSingleTop = true } }) }
+            composable("settings") {
+                SettingsScreen(
+                    snackbar = snackbar,
+                    onOpenConnection = { nav.navigate("connection") { launchSingleTop = true } },
+                    onOpenAbout = { nav.navigate("about") { launchSingleTop = true } },
+                )
+            }
             composable("connection") { ConnectionScreen(onBack = { nav.popBackStack() }) }
+            composable("about") { AboutScreen(onBack = { nav.popBackStack() }) }
         }
     }
 }

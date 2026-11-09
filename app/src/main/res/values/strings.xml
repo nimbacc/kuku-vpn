@@ -118,4 +118,18 @@
     <string name="error_core">Core error: %1$s</string>
     <string name="ok">OK</string>
     <string name="cancel">Cancel</string>
+
+    <!-- About page (v1.4.1) -->
+    <string name="about_title">About</string>
+    <string name="about_settings_hint">Version, engine and project links</string>
+    <string name="about_version_value">Version %1$s (%2$d)</string>
+    <string name="about_version_unknown">Version unknown</string>
+    <string name="about_engine_value">Engine: sing-box (libbox) 1.11.15 + WARP MASQUE (usque)</string>
+    <string name="about_github">GitHub</string>
+    <string name="about_github_hint">Source code, issues and new releases</string>
+    <string name="about_changes">Recent changes</string>
+    <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
+    <string name="about_change_140">1.4.0 — FLUX turbo: live multi-path rotation, always on the fastest edge</string>
+    <string name="about_change_130">1.3.0 — Connection page: method selector, scan modes and WARP×2 (gool)</string>
+    <string name="about_licenses">Open-source: sing-box (GPL-3.0) · usque (MIT) · Go/gVisor (BSD)</string>
 </resources>

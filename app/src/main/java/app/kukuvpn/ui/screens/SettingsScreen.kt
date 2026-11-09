@@ -43,7 +43,7 @@ import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {}) {
+fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {}, onOpenAbout: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as KukuApp
     val scope = rememberCoroutineScope()
@@ -152,6 +152,27 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 ToggleRow(stringResource(R.string.settings_sub_auto_update), settings.subAutoUpdate) { v -> scope.launch { app.settingsStore.setSubAutoUpdate(v) } }
                 ToggleRow(stringResource(R.string.mode_vpn), settings.vpnMode) { v -> scope.launch { app.settingsStore.setVpnMode(v) } }
+            }
+        }
+
+        /* ------------------------------- about --------------------------------- */
+        SectionCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenAbout() }
+                    .padding(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.about_title), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(R.string.about_settings_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

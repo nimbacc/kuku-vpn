@@ -114,4 +114,18 @@
     <string name="error_core">خطای هسته: %1$s</string>
     <string name="ok">باشه</string>
     <string name="cancel">لغو</string>
+
+    <!-- About page (v1.4.1) -->
+    <string name="about_title">درباره</string>
+    <string name="about_settings_hint">نسخه، موتور و پیوندهای پروژه</string>
+    <string name="about_version_value">نسخه %1$s (%2$d)</string>
+    <string name="about_version_unknown">نسخه نامشخص</string>
+    <string name="about_engine_value">موتور: sing-box (libbox) 1.11.15 + WARP MASQUE (usque)</string>
+    <string name="about_github">گیت‌هاب</string>
+    <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
+    <string name="about_changes">تغییرات اخیر</string>
+    <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_140">1.4.0 — توربو FLUX: چرخش زندهٔ چندمسیره، همیشه روی سریع‌ترین لبه</string>
+    <string name="about_change_130">1.3.0 — صفحهٔ اتصال: انتخاب روش، حالت جست‌وجو و WARP×2 (گول)</string>
+    <string name="about_licenses">متن‌باز: sing-box (GPL-3.0) · usque (MIT) · Go/gVisor (BSD)</string>
 </resources>
