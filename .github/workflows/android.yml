@@ -109,22 +109,23 @@ jobs:
           path: third_party/corebind/warpcore.aar
 
       # v1.5.0 Psiphon backend: the tunnel core ships as a per-ABI ELF that the
-      # app EXECUTES as a child process (like the Xray clients do). Run #19/#20
+      # app EXECUTES as a child process (like the Xray clients do). Run #19-#21
       # failure history: the module graph forces a modern Go (go.mod >= 1.26),
       # and wlynxg/anet (quic-go's Android shim) then dies at link time on its
       # go:linkname of net.zoneCache — anet's own README prescribes the fix:
-      # build with -checklinkname=0. Sandbox-proven: arm64 ELF links clean.
-      - name: build psiphon core (console client, 2 ABIs)
+      # build with -checklinkname=0. 32-bit android/arm is NOT built: Go
+      # requires external cgo linking there (run #21); on such devices the
+      # psiphon candidates fail fast and the smart WARP chain takes over.
+      - name: build psiphon core (console client, arm64)
         run: |
           set -e
           git -c core.longpaths=true clone --quiet --depth 50 --branch shirokhorshid \
             https://github.com/CluvexStudio/psiphon-tunnel-core.git /tmp/psiphon
           git -C /tmp/psiphon checkout --quiet 83aa73b9b982e7421e00117f5b0c5aceb5dda452
           out=/tmp/psiphon-out
-          mkdir -p "$out/arm64-v8a" "$out/armeabi-v7a"
+          mkdir -p "$out/arm64-v8a"
           cd /tmp/psiphon/ConsoleClient
           GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/arm64-v8a/libpsiphon.so" .
-          GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/armeabi-v7a/libpsiphon.so" .
           ls -lh "$out"/*/
 
       - name: upload psiphon artifact
