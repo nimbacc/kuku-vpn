@@ -78,6 +78,10 @@ object OutboundFactory {
                     if (profile.preSharedKey.isNotBlank()) put("pre_shared_key", profile.preSharedKey)
                     put("mtu", profile.wgMtu)
                     parseReserved(profile.wgReserved)?.let { put("reserved", JsonArray(it)) }
+                    // v1.3.0 WARP×2 (gool): the inner WireGuard tunnel dials
+                    // through the MASQUE engine's socks — SingBoxConfigBuilder
+                    // emits the "warp-underlay" outbound this tag points to.
+                    if (profile.transport == "gool") put("detour", "warp-underlay")
                 }
             }
             ProfileType.SSH -> {

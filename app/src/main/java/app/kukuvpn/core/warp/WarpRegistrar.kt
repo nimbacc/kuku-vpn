@@ -58,12 +58,30 @@ object WarpRegistrar {
     /** Marker stored in Profile.fromSubscription so we can find our profiles again. */
     const val WARP_SOURCE = "warp"
 
+    /** v1.3.0: marker for the WARP×2 (gool) inner-hop profile — a SECOND,
+     *  independent WARP identity whose WireGuard tunnel rides INSIDE the
+     *  MASQUE engine's socks. Excluded from the smart chain; used only when
+     *  the user pins the gool method on the Connection page. */
+    const val WARP_GOOL_SOURCE = "warp-gool"
+
+    /** Profile.transport value of the gool inner-hop profile. */
+    const val TRANSPORT_GOOL_WG = "gool"
+
     /** Profile.transport values that route through the local MASQUE engine. */
     const val TRANSPORT_MASQUE = "masque"       // HTTP/3 over QUIC (UDP 443)
     const val TRANSPORT_MASQUE_H2 = "masque-h2" // HTTP/2 over TCP 443 — survives full UDP blocks
 
     private const val API = "https://api.cloudflareclient.com/v0a2158/reg"
     private const val DEFAULT_PEER_KEY = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+
+    /**
+     * MTU for the gool inner WireGuard tunnel: the MASQUE tunnel's netstack
+     * carries packets up to 1280 B; the inner WG data packet adds ~32 B of
+     * WG+UDP+IP overhead on top of the inner IP packet, so the inner MTU
+     * must leave headroom. 1140 is safe on both H3 and H2 carriers (proven
+     * end-to-end in the sandbox with a real request over the double tunnel).
+     */
+    private const val GOOL_MTU = 1140
 
     /** Anycast WARP endpoint — same value wgcf uses. */
     private const val DEFAULT_ENDPOINT_IP = "162.159.192.1"
@@ -175,8 +193,22 @@ object WarpRegistrar {
         }
     }
 
-    /** One registration → four profiles, one per known-good WARP port. */
-    private fun registerAll(context: Context): List<Profile> {
+    /** One parsed /reg response, shared by the plain-WG and gool registrations. */
+    private data class WgRegistration(
+        val endpointIp: String,
+        val ports: List<Int>,
+        val v4: String,
+        val v6: String,
+        val clientId: String,
+        val peerKey: String,
+        val privB64: String,
+    )
+
+    /**
+     * One registration → one parsed identity. Client-minted X25519 keypair,
+     * POST /v0a2158/reg (identical to wgcf/aether), reserved = client_id bytes.
+     */
+    private fun registerIdentity(): WgRegistration {
         val privateKey = X25519.generatePrivateKey()
         val publicKey = X25519.publicKeyFromPrivate(privateKey)
 
@@ -207,31 +239,78 @@ object WarpRegistrar {
             ?.get("addresses")?.jsonObject ?: error("no addresses in WARP response")
         val v4 = addresses["v4"]?.jsonPrimitive?.content ?: "172.16.0.2"
         val v6 = addresses["v6"]?.jsonPrimitive?.content ?: ""
-        val wgAddresses = buildList {
-            add("$v4/32")
-            if (v6.isNotBlank()) add("$v6/128")
-        }.joinToString(",")
 
         // client_id is 3 bytes base64-encoded; they become the WG "reserved" field.
         val clientId = config["client_id"]?.jsonPrimitive?.content ?: ""
         val peerKey = peer["public_key"]?.jsonPrimitive?.content ?: DEFAULT_PEER_KEY
-        val privB64 = X25519.toBase64(privateKey)
+        return WgRegistration(
+            endpointIp = endpointIp,
+            ports = ports,
+            v4 = v4,
+            v6 = v6,
+            clientId = clientId,
+            peerKey = peerKey,
+            privB64 = X25519.toBase64(privateKey),
+        )
+    }
 
-        return ports.map { port ->
+    /** One registration → four profiles, one per known-good WARP port. */
+    private fun registerAll(context: Context): List<Profile> {
+        val reg = registerIdentity()
+        val wgAddresses = buildList {
+            add("${reg.v4}/32")
+            if (reg.v6.isNotBlank()) add("${reg.v6}/128")
+        }.joinToString(",")
+
+        return reg.ports.map { port ->
             Profile(
                 name = if (port == FALLBACK_PORTS.first()) context.getString(R.string.warp_profile_name)
                 else context.getString(R.string.warp_variant_name, port),
                 type = ProfileType.WIREGUARD,
-                host = endpointIp,
+                host = reg.endpointIp,
                 port = port,
-                publicKey = peerKey,
-                privateKey = privB64,
+                publicKey = reg.peerKey,
+                privateKey = reg.privB64,
                 wgAddresses = wgAddresses,
                 wgMtu = 1280, // conservative MTU that works on both Wi-Fi and cellular
-                wgReserved = clientId,
+                wgReserved = reg.clientId,
                 fromSubscription = WARP_SOURCE,
             )
         }
+    }
+
+    /**
+     * v1.3.0 WARP×2 (gool): lazily registers the SECOND WARP identity used
+     * as the inner hop of the double tunnel and stores it as one profile.
+     * The inner WireGuard tunnel dials through the MASQUE engine's socks
+     * (see SingBoxConfigBuilder — wireguard outbound with detour
+     * "warp-underlay"). Only called when the user pins the gool method.
+     * Throws when the CF API is unreachable — callers fall back to Smart.
+     */
+    suspend fun ensureGoolProfile(context: Context): Profile = withContext(Dispatchers.IO) {
+        val store = (context.applicationContext as KukuApp).profileStore
+        store.snapshot().firstOrNull { it.fromSubscription == WARP_GOOL_SOURCE }?.let {
+            return@withContext it
+        }
+        val reg = registerIdentity()
+        val profile = Profile(
+            name = context.getString(R.string.warp_gool_name),
+            type = ProfileType.WIREGUARD,
+            host = reg.endpointIp,
+            port = 2408,
+            publicKey = reg.peerKey,
+            privateKey = reg.privB64,
+            wgAddresses = buildList {
+                add("${reg.v4}/32")
+                if (reg.v6.isNotBlank()) add("${reg.v6}/128")
+            }.joinToString(","),
+            wgMtu = GOOL_MTU,
+            wgReserved = reg.clientId,
+            transport = TRANSPORT_GOOL_WG,
+            fromSubscription = WARP_GOOL_SOURCE,
+        )
+        store.addAll(listOf(profile))
+        profile
     }
 
     /** Clone an already-stored WARP identity onto a new port — no re-registration. */

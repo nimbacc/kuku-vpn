@@ -32,6 +32,33 @@
     <string name="warp_masque_h2_name">کلادفلر WARP (پشتیبان TCP)</string>
     <string name="warp_variant_name">کلادفلر WARP (رایگان) — پورت %1$d</string>
     <string name="warp_setting_up">در حال آماده‌سازی اتصال رایگان (کلادفلر WARP)…</string>
+    <string name="warp_gool_name">کلادفلر WARP ×2 (گول)</string>
+
+    <!-- Connection page (v1.3.0 method selector) -->
+    <string name="conn_title">اتصال</string>
+    <string name="conn_protocol">روش اتصال</string>
+    <string name="conn_protocol_desc">مشخص می‌کند روی اتصال، اول از چه مسیری استفاده شود. «هوشمند» همیشه پشت هر روش انتخابی می‌ماند، پس انتخاب روش هرگز شما را بی‌اینترنت نمی‌کند.</string>
+    <string name="conn_smart">هوشمند</string>
+    <string name="conn_smart_desc">دو مسیر را همزمان امتحان می‌کند (TCP-443 و UDP-443) و به یاد می‌سپارد کدام روی این شبکه جواب داده تا اتصال بعدی سریع باشد.</string>
+    <string name="conn_masque">MASQUE</string>
+    <string name="conn_masque_desc">فقط WARP روی MASQUE — دو شکل سیمی MASQUE (TCP-443 و UDP-443) باز هم با هم مسابقه می‌دهند.</string>
+    <string name="conn_wg">WireGuard</string>
+    <string name="conn_wg_desc">WireGuard مستقیم به کلادفلر (UDP). وقتی UDP فیلتر نشده باشد سریع‌ترین گزینه است.</string>
+    <string name="conn_gool">WARP ×2 (گول)</string>
+    <string name="conn_gool_desc">دو تونل WARP پشت‌سرهم — هاپ دوم داخل هاپ اول سوار می‌شود. هر هاپ کندتر است ولی گاهی کل مسیر سریع‌تر تمام می‌شود. آزمایشی.</string>
+    <string name="conn_scan">حالت جست‌وجو</string>
+    <string name="conn_scan_desc">مشخص می‌کند موتور چقدر سخت و چقدر طولانی دنبال یک نقطهٔ پایانی سالم بگردد.</string>
+    <string name="scan_turbo">توربو</string>
+    <string name="scan_turbo_desc">کوتاه‌ترین جست‌وجو — سریع وصل شو یا برو سراغ بعدی.</string>
+    <string name="scan_balanced">متعادل</string>
+    <string name="scan_balanced_desc">پیش‌فرض. روی بیشتر شبکه‌ها خوب جواب می‌دهد.</string>
+    <string name="scan_thorough">کامل</string>
+    <string name="scan_thorough_desc">جست‌وجوی صبور روی همهٔ نقاط پایانی — برای شبکه‌هایی که لبه‌ها کندند.</string>
+    <string name="scan_stealth">مخفی‌کاری</string>
+    <string name="scan_stealth_desc">اصلاً UDP ندارد: فقط MASQUE روی TCP 443 خالص — از دید فیلتر شبیه HTTPS معمولی است.</string>
+    <string name="scan_ironclad">زره‌پوش</string>
+    <string name="scan_ironclad_desc">طولانی‌ترین و پایدارترین جست‌وجو — همهٔ مسیرها، همهٔ نقاط پایانی.</string>
+    <string name="conn_applies_next">از اتصال بعدی اعمال می‌شود.</string>
 
     <!-- Profiles -->
     <string name="tab_profiles">پروفایل‌ها</string>

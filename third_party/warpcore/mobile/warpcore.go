@@ -148,6 +148,38 @@ func transportName(useHTTP2 bool) string {
 	return "udp-443/h3"
 }
 
+// scanParams is the tunable sweep profile behind the app's "Scan mode"
+// setting (v1.3.0, the Aether-style Connection page). Every mode keeps the
+// same wave-racing model — the knobs only change how hard and how long the
+// sweep pushes:
+//
+//	turbo     — short budgets; connect fast or hand over to the next method
+//	balanced  — the v1.2.7 defaults (9s waves, 45s cap)
+//	thorough  — patient waves for networks where every edge is slow
+//	stealth   — H2 over plain TCP 443 ONLY: no UDP at all, the tunnel is
+//	            indistinguishable from ordinary HTTPS to the DPI box
+//	ironclad  — the longest push; every transport, every endpoint
+type scanParams struct {
+	transports []bool
+	waveBudget time.Duration
+	hardCap    time.Duration
+}
+
+func scanParamsFor(mode string) scanParams {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "turbo":
+		return scanParams{transports: []bool{false, true}, waveBudget: 6 * time.Second, hardCap: 20 * time.Second}
+	case "thorough":
+		return scanParams{transports: []bool{false, true}, waveBudget: 15 * time.Second, hardCap: 90 * time.Second}
+	case "stealth":
+		return scanParams{transports: []bool{true}, waveBudget: 12 * time.Second, hardCap: 60 * time.Second}
+	case "ironclad":
+		return scanParams{transports: []bool{false, true}, waveBudget: 18 * time.Second, hardCap: 120 * time.Second}
+	default: // balanced
+		return scanParams{transports: []bool{false, true}, waveBudget: waveBudget, hardCap: startHardCap}
+	}
+}
+
 // engineState — one live engine, owned by exactly one boot call.
 //
 // BUG HISTORY (v1.2.5): the old globals (stopFn/doneCh/activeSrv) were
@@ -309,7 +341,7 @@ func closeTunDraining(dev tun.Device) error {
 // 1.1.1.1:53 THROUGH the tunnel). Attempts are parented to rootCtx so the
 // winner's tunnel survives the sweep's own cancellation; `stop` (closed)
 // means "another transport won / engine stopping — unwind NOW".
-func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline time.Time, tlsConfig *tls.Config, useHTTP2 bool, localAddresses []netip.Addr, dnsAddrs []netip.Addr) (attemptResult, error) {
+func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline time.Time, tlsConfig *tls.Config, useHTTP2 bool, localAddresses []netip.Addr, dnsAddrs []netip.Addr, budget time.Duration) (attemptResult, error) {
 	stopped := func() bool {
 		select {
 		case <-stop:
@@ -417,7 +449,7 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 				// each dial races a hard timer for the remaining budget
 				// and the attempt context is cancelled on timeout so the
 				// dial and the tunnel goroutine unwind.
-				deadline := time.Now().Add(waveBudget)
+				deadline := time.Now().Add(budget)
 				if deadline.After(startDeadline) {
 					deadline = startDeadline
 				}
@@ -459,7 +491,7 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 			time.Sleep(waveStagger)
 		}
 
-		waveWait := waveBudget + time.Duration(len(wave))*waveStagger + 2*time.Second
+		waveWait := budget + time.Duration(len(wave))*waveStagger + 2*time.Second
 		if end := time.Now().Add(waveWait); end.After(startDeadline) {
 			waveWait = time.Until(startDeadline)
 			if waveWait < 0 {
@@ -488,7 +520,7 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 			return attemptResult{}, fmt.Errorf("%s sweep cancelled", transportName(useHTTP2))
 		case <-time.After(waveWait):
 			lastErr = fmt.Errorf("%s wave %d/%d: no endpoint carried traffic within %s",
-				transportName(useHTTP2), waveNum, totalWaves, waveBudget)
+				transportName(useHTTP2), waveNum, totalWaves, budget)
 			log.Printf("warpcore: %v", lastErr)
 		}
 		closeLosers(false)
@@ -500,24 +532,31 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 }
 
 // Start brings up the MASQUE tunnel over ONE transport (kept for tools and
-// tests; the app uses StartAuto). useHTTP2 selects MASQUE over TCP+TLS/H2
-// instead of QUIC/H3.
+// tests; the app uses StartAuto/StartAutoWithMode). useHTTP2 selects MASQUE
+// over TCP+TLS/H2 instead of QUIC/H3.
 func Start(configDir string, port int, useHTTP2 bool) error {
-	return startEngine(configDir, port, []bool{useHTTP2})
+	p := scanParamsFor("")
+	p.transports = []bool{useHTTP2}
+	return startEngine(configDir, port, p)
 }
 
-// StartAuto brings the tunnel up by RACING BOTH wire formats at once:
-// MASQUE over HTTP/3 (QUIC, UDP 443) and MASQUE over HTTP/2 (TCP 443),
-// each with its own endpoint sweep. On networks where the ISP filters
-// UDP the H3 attempts die quickly and the TCP sweep wins in ~2-5s; on
-// UDP-friendly networks H3 wins. Either way a nil error means real
-// traffic is flowing through the SOCKS listener — no serial walk to
-// time out, no transport guesswork.
+// StartAuto brings the tunnel up by RACING BOTH wire formats at once with
+// the balanced scan profile (the v1.2.7 behaviour, kept for compatibility):
+// MASQUE over HTTP/3 (QUIC, UDP 443) and MASQUE over HTTP/2 (TCP 443), each
+// with its own endpoint sweep. A nil error means real traffic is flowing
+// through the SOCKS listener.
 func StartAuto(configDir string, port int) error {
-	return startEngine(configDir, port, []bool{false, true})
+	return startEngine(configDir, port, scanParamsFor(""))
 }
 
-func startEngine(configDir string, port int, transports []bool) error {
+// StartAutoWithMode is StartAuto with the user's Scan mode applied (v1.3.0).
+// mode: "turbo" | "balanced" | "thorough" | "stealth" | "ironclad" — anything
+// else falls back to balanced. See scanParams for the exact knobs.
+func StartAutoWithMode(configDir string, port int, mode string) error {
+	return startEngine(configDir, port, scanParamsFor(mode))
+}
+
+func startEngine(configDir string, port int, p scanParams) error {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	mu.Lock()
 	if current != nil {
@@ -594,23 +633,23 @@ func startEngine(configDir string, port int, transports []bool) error {
 	// sweep to prove a real round-trip wins. The winner's attempt context
 	// is parented to rootCtx (NOT the sweep), so closing the losing
 	// sweep's stop channel cannot touch the winning tunnel.
-	startDeadline := time.Now().Add(startHardCap)
+	startDeadline := time.Now().Add(p.hardCap)
 	type outcome struct {
 		res attemptResult
 		h2  bool
 		err error
 	}
-	outCh := make(chan outcome, len(transports))
+	outCh := make(chan outcome, len(p.transports))
 	stopH3 := make(chan struct{})
 	stopH2 := make(chan struct{})
-	for _, h2 := range transports {
+	for _, h2 := range p.transports {
 		h2 := h2
 		stopCh := stopH3
 		if h2 {
 			stopCh = stopH2
 		}
 		go func() {
-			res, err := sweepTransport(rootCtx, stopCh, startDeadline, tlsConfig, h2, localAddresses, dnsAddrs)
+			res, err := sweepTransport(rootCtx, stopCh, startDeadline, tlsConfig, h2, localAddresses, dnsAddrs, p.waveBudget)
 			outCh <- outcome{res: res, h2: h2, err: err}
 		}()
 	}
@@ -620,7 +659,7 @@ func startEngine(configDir string, port int, transports []bool) error {
 		winH2   bool
 		haveWin bool
 		lastErr error
-		pending = len(transports)
+		pending = len(p.transports)
 	)
 	for pending > 0 {
 		select {
@@ -653,7 +692,7 @@ func startEngine(configDir string, port int, transports []bool) error {
 	if !haveWin {
 		rootCancel()
 		return fmt.Errorf("tunnel did not come up across %d transport(s) within %s: last: %v",
-			len(transports), startHardCap, lastErr)
+			len(p.transports), p.hardCap, lastErr)
 	}
 
 	// Remember the winner so the NEXT boot validates it first (~1-2s

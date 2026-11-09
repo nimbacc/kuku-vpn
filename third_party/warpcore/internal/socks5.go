@@ -372,9 +372,26 @@ func (s *SOCKS5Server) UDPHandle(srv *socks5.Server, addr *net.UDPAddr, d *socks
 	if srv.LimitUDP {
 		any, ok := srv.AssociatedUDP.Get(src)
 		if !ok {
-			return fmt.Errorf("udp address %s is not associated with tcp", src)
+			// BUG HISTORY (v1.3.0): standard socks5 clients (sing-box, curl,
+			// golang.org/x/net/proxy…) send the UDP ASSOCIATE request with
+			// DST 0.0.0.0:0 and then emit datagrams from an arbitrary UDP
+			// port, but txthinking registers the association under the
+			// DECLARED address only — every standard client was rejected
+			// with "not associated with tcp", which silently broke ALL UDP
+			// through this port (DNS over UDP, QUIC, WireGuard tunnels
+			// chained over the socks port). The listener is loopback-only,
+			// so an unregistered datagram can only come from a local
+			// process: register it on first sight with a bounded TTL
+			// instead of rejecting it. Non-loopback sources stay rejected.
+			if !addr.IP.IsLoopback() {
+				return fmt.Errorf("udp address %s is not associated with tcp", src)
+			}
+			nch := make(chan byte)
+			srv.AssociatedUDP.Set(src, nch, 5*time.Minute)
+			ch = nch
+		} else {
+			ch = any.(chan byte)
 		}
-		ch = any.(chan byte)
 	}
 	send := func(ue *socks5.UDPExchange, data []byte) error {
 		select {

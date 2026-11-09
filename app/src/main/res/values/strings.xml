@@ -34,6 +34,33 @@
     <string name="warp_masque_h2_name">Cloudflare WARP (TCP fallback)</string>
     <string name="warp_variant_name">Cloudflare WARP (Free) — port %1$d</string>
     <string name="warp_setting_up">Preparing your free connection (Cloudflare WARP)…</string>
+    <string name="warp_gool_name">Cloudflare WARP ×2 (Gool)</string>
+
+    <!-- Connection page (v1.3.0 method selector) -->
+    <string name="conn_title">Connection</string>
+    <string name="conn_protocol">Method</string>
+    <string name="conn_protocol_desc">What is tried first on connect. Smart stays behind every pinned method as a safety net, so a pinned method can never leave you offline.</string>
+    <string name="conn_smart">Smart</string>
+    <string name="conn_smart_desc">Races two routes at the same time (TCP-443 and UDP-443) and remembers which one worked on this network, so the next connect is quick.</string>
+    <string name="conn_masque">MASQUE</string>
+    <string name="conn_masque_desc">WARP over MASQUE only — the two MASQUE wire formats (TCP-443 + UDP-443) still race each other.</string>
+    <string name="conn_wg">WireGuard</string>
+    <string name="conn_wg_desc">Plain WireGuard straight to Cloudflare (UDP). The fastest when UDP is not filtered.</string>
+    <string name="conn_gool">WARP ×2 (Gool)</string>
+    <string name="conn_gool_desc">Two WARP tunnels chained — the second hop rides inside the first. Slower per-hop, sometimes faster end-to-end. Experimental.</string>
+    <string name="conn_scan">Scan mode</string>
+    <string name="conn_scan_desc">How hard and how long the engine hunts for a working endpoint before handing over.</string>
+    <string name="scan_turbo">Turbo</string>
+    <string name="scan_turbo_desc">Shortest sweep — connect fast or move on.</string>
+    <string name="scan_balanced">Balanced</string>
+    <string name="scan_balanced_desc">The default. Good on most networks.</string>
+    <string name="scan_thorough">Thorough</string>
+    <string name="scan_thorough_desc">Patient sweep across every endpoint — for networks where edges are slow.</string>
+    <string name="scan_stealth">Stealth</string>
+    <string name="scan_stealth_desc">No UDP at all: only MASQUE over plain TCP 443, indistinguishable from ordinary HTTPS.</string>
+    <string name="scan_ironclad">Ironclad</string>
+    <string name="scan_ironclad_desc">The longest, most persistent sweep — every transport, every endpoint.</string>
+    <string name="conn_applies_next">Takes effect on the next connect.</string>
 
     <!-- Profiles -->
     <string name="tab_profiles">Profiles</string>

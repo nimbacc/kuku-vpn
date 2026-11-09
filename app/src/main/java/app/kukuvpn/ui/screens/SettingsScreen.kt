@@ -2,6 +2,7 @@ package app.kukuvpn.ui.screens
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -42,7 +43,7 @@ import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(snackbar: SnackbarHostState) {
+fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {}) {
     val context = LocalContext.current
     val app = context.applicationContext as KukuApp
     val scope = rememberCoroutineScope()
@@ -51,6 +52,27 @@ fun SettingsScreen(snackbar: SnackbarHostState) {
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall)
+
+        /* ----------------------------- connection ----------------------------- */
+        SectionCard {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenConnection() }
+                    .padding(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.conn_title), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        protocolSummary(settings.protocol),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
 
         /* ------------------------------ language ------------------------------ */
         SectionCard {
@@ -175,6 +197,15 @@ fun SettingsScreen(snackbar: SnackbarHostState) {
 @Composable
 private fun SectionCard(content: @Composable () -> Unit) {
     Card { content() }
+}
+
+/** One-line summary under the Connection entry — the current method. */
+@Composable
+private fun protocolSummary(protocol: String): String = when (protocol) {
+    "masque" -> stringResource(R.string.conn_masque)
+    "wg" -> stringResource(R.string.conn_wg)
+    "gool" -> stringResource(R.string.conn_gool)
+    else -> stringResource(R.string.conn_smart)
 }
 
 @Composable

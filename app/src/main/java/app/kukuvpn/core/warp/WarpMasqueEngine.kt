@@ -94,9 +94,13 @@ object WarpMasqueEngine {
      * wait, registration and the Go sweep. And [start] is wrapped in a hard
      * [BOOT_HARD_CAP_MS] cap that tears the engine down from outside if the
      * Go side ever wedges (the v1.2.6 gVisor close-deadlock did exactly that).
+     *
+     * v1.3.0: [scanMode] ("turbo" | "balanced" | "thorough" | "stealth" |
+     * "ironclad") tunes the Go sweep's budgets — see warpcore.scanParams.
      */
     suspend fun boot(
         context: Context,
+        scanMode: String = "balanced",
         onTick: ((Long) -> Unit)? = null,
     ): Result<Unit> {
         val t0 = SystemClock.elapsedRealtime()
@@ -117,7 +121,7 @@ object WarpMasqueEngine {
                     withContext(Dispatchers.IO) {
                         ensureRegistered(context)
                         stop() // stale instance — deterministic teardown, then a cold boot
-                        start(context)
+                        start(context, scanMode)
                     }
                 }
             }
@@ -134,22 +138,22 @@ object WarpMasqueEngine {
      * Safe to call unconditionally: boot() is single-flight and reuses the
      * engine whatever mode it raced.
      */
-    fun prewarm(context: Context) {
+    fun prewarm(context: Context, scanMode: String = "balanced") {
         engineScope.launch {
-            runCatching { boot(context) }
+            runCatching { boot(context, scanMode) }
             // silent: the connect flow retries with full logging + fallback
         }
     }
 
-    private suspend fun start(context: Context) {
+    private suspend fun start(context: Context, scanMode: String) {
         stop() // deterministic teardown of any previous instance
         var bootError: Exception? = null
         val job = engineScope.launch {
             try {
-                // v1.2.7: StartAuto — the engine races TCP-443/H2 and
-                // UDP-443/H3 sweeps in parallel; gomobile binds Go int as
-                // Java long
-                Warpcore.startAuto(configDir(context), SOCKS_PORT.toLong())
+                // v1.2.7: the engine RACES TCP-443/H2 and UDP-443/H3 sweeps
+                // in parallel; v1.3.0 passes the user's scan mode which tunes
+                // the sweep budgets (gomobile binds Go int as Java long)
+                Warpcore.startAutoWithMode(configDir(context), SOCKS_PORT.toLong(), scanMode)
             } catch (e: Exception) {
                 bootError = e // isolated job: no outer cancellation to honor
             }

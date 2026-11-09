@@ -22,6 +22,12 @@ private object ProfileKeys {
     val LIST = stringPreferencesKey("profiles_json")
     val SELECTED = stringPreferencesKey("selected_id")
     val LAST_GOOD = stringPreferencesKey("last_good_id")
+    // v1.3.0 Aether-style memory: which profile last VERIFIED per network
+    // class — wifi and cellular remember independently, so switching networks
+    // still starts with the profile that worked THERE ("the next connect is
+    // quick").
+    val LAST_GOOD_WIFI = stringPreferencesKey("last_good_wifi")
+    val LAST_GOOD_CELL = stringPreferencesKey("last_good_cell")
     val SUBSCRIPTIONS = stringSetPreferencesKey("subscription_urls")
     // "1" once the user deleted the auto-created free WARP profile — never re-create it
     val WARP_DELETED = stringPreferencesKey("warp_deleted")
@@ -112,6 +118,26 @@ class ProfileStore(private val context: Context) {
     suspend fun select(id: String) = context.profileDataStore.edit { it[ProfileKeys.SELECTED] = id }
     suspend fun setLastGood(id: String) = context.profileDataStore.edit { it[ProfileKeys.LAST_GOOD] = id }
 
+    /**
+     * v1.3.0 per-network memory (Aether Smart-style). networkClass is
+     * "wifi" or "cell" (empty/other classes fall back to the plain lastGood).
+     */
+    suspend fun setLastGoodForNetwork(networkClass: String, id: String) = context.profileDataStore.edit {
+        when (networkClass) {
+            "wifi" -> it[ProfileKeys.LAST_GOOD_WIFI] = id
+            "cell" -> it[ProfileKeys.LAST_GOOD_CELL] = id
+        }
+    }
+
+    suspend fun lastGoodForNetwork(networkClass: String): String? =
+        context.profileDataStore.data.map { prefs ->
+            when (networkClass) {
+                "wifi" -> prefs[ProfileKeys.LAST_GOOD_WIFI]
+                "cell" -> prefs[ProfileKeys.LAST_GOOD_CELL]
+                else -> null
+            }
+        }.first()
+
     suspend fun addSubscription(url: String) = context.profileDataStore.edit {
         it[ProfileKeys.SUBSCRIPTIONS] = (it[ProfileKeys.SUBSCRIPTIONS] ?: emptySet()) + url
     }
@@ -134,6 +160,14 @@ data class AppSettings(
     val autoFallback: Boolean = true,
     val subAutoUpdate: Boolean = true,
     val vpnMode: Boolean = true,    // true full-device VPN, false local proxy only
+    // v1.3.0 Connection page (Aether-style method selector):
+    // "smart" (engine races TCP-443 + UDP-443 and the chain ranks everything)
+    // "masque" (WARP over MASQUE only) · "wg" (plain WireGuard only)
+    // "gool" (WARP×2, second tunnel inside the first — experimental)
+    val protocol: String = "smart",
+    // v1.3.0 Scan mode: "turbo" | "balanced" | "thorough" | "stealth" | "ironclad"
+    // (stealth = no UDP at all — only MASQUE over plain TCP 443)
+    val scanMode: String = "balanced",
 )
 
 private object SettingsKeys {
@@ -145,6 +179,8 @@ private object SettingsKeys {
     val AUTO_FALLBACK = stringPreferencesKey("auto_fallback")
     val SUB_AUTO_UPDATE = stringPreferencesKey("sub_auto_update")
     val VPN_MODE = stringPreferencesKey("vpn_mode")
+    val PROTOCOL = stringPreferencesKey("protocol")
+    val SCAN_MODE = stringPreferencesKey("scan_mode")
 }
 
 class SettingsStore(private val context: Context) {
@@ -159,6 +195,8 @@ class SettingsStore(private val context: Context) {
             autoFallback = p[SettingsKeys.AUTO_FALLBACK]?.toBooleanStrictOrNull() ?: true,
             subAutoUpdate = p[SettingsKeys.SUB_AUTO_UPDATE]?.toBooleanStrictOrNull() ?: true,
             vpnMode = p[SettingsKeys.VPN_MODE]?.toBooleanStrictOrNull() ?: true,
+            protocol = p[SettingsKeys.PROTOCOL] ?: "smart",
+            scanMode = p[SettingsKeys.SCAN_MODE] ?: "balanced",
         )
     }
 
@@ -172,4 +210,6 @@ class SettingsStore(private val context: Context) {
     suspend fun setAutoFallback(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.AUTO_FALLBACK] = v.toString() }
     suspend fun setSubAutoUpdate(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.SUB_AUTO_UPDATE] = v.toString() }
     suspend fun setVpnMode(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.VPN_MODE] = v.toString() }
+    suspend fun setProtocol(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PROTOCOL] = v }
+    suspend fun setScanMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.SCAN_MODE] = v }
 }

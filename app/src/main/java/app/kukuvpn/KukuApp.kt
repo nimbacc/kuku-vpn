@@ -10,6 +10,7 @@ import app.kukuvpn.data.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -58,7 +59,11 @@ class KukuApp : Application() {
                 it.fromSubscription == WarpRegistrar.WARP_SOURCE &&
                     it.transport.startsWith(WarpRegistrar.TRANSPORT_MASQUE)
             }
-            if (hasMasque) WarpMasqueEngine.prewarm(this)
+            if (hasMasque) {
+                // v1.3.0: prewarm honors the user's scan mode
+                val scanMode = settingsStore.settings.first().scanMode
+                WarpMasqueEngine.prewarm(this, scanMode)
+            }
         }
     }
 }

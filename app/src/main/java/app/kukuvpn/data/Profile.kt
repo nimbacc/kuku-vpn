@@ -73,6 +73,7 @@ data class Profile(
             ProfileType.WIREGUARD -> when {
                 transport == "masque-h2" -> "masque-h2/tcp"
                 transport == "masque" -> "masque-h3/udp"
+                transport == "gool" -> "wg×2/gool"
                 else -> "wg"
             }
             ProfileType.SSH -> "ssh"

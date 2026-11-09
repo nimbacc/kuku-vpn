@@ -1,5 +1,7 @@
 package app.kukuvpn.core.config
 
+import app.kukuvpn.core.warp.WarpMasqueEngine
+import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
 import kotlinx.serialization.json.JsonObject
@@ -100,6 +102,20 @@ object SingBoxConfigBuilder {
 
         putJsonArray("outbounds") {
             add(OutboundFactory.build(profile, "proxy"))
+            // v1.3.0 WARP×2 (gool): the "proxy" outbound is the INNER WireGuard
+            // tunnel and dials through the MASQUE engine's socks — the second
+            // hop rides inside the first. Proven end-to-end in the sandbox
+            // (real request → warp=on with a DIFFERENT exit IP than the outer
+            // hop) before shipping.
+            if (profile.transport == WarpRegistrar.TRANSPORT_GOOL_WG) {
+                add(buildJsonObject {
+                    put("type", "socks")
+                    put("tag", "warp-underlay")
+                    put("server", "127.0.0.1")
+                    put("server_port", WarpMasqueEngine.SOCKS_PORT)
+                    put("version", "5")
+                })
+            }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
             add(buildJsonObject { put("type", "dns"); put("tag", "dns-out") })
         }

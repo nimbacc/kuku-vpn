@@ -187,12 +187,37 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
         stopping.set(false)
         settings = settingsStore.snapshot()
+        // v1.3.0 Connection page: user-pinned method + scan mode.
+        val protocol = settings.protocol
+        ServiceBridge.log("INFO", "method: $protocol · scan mode: ${settings.scanMode}")
+        if (protocol == FallbackEngine.PROTOCOL_GOOL) {
+            // lazily register the SECOND WARP identity used as the inner hop;
+            // on failure the chain falls back to the ranked smart candidates
+            try {
+                WarpRegistrar.ensureGoolProfile(this)
+            } catch (e: Exception) {
+                ServiceBridge.log("WARN", "WARP×2 identity: ${e.message} — falling back to Smart")
+            }
+        }
         startNotif(getString(R.string.notif_connecting), ongoing = true)
 
         ServiceBridge.resetSession()
         ServiceBridge.state.value = TunnelState.PREPARING
 
-        val chain = buildChain()
+        var chain = buildChain(protocol)
+        // stealth scan mode: no raw-UDP wire format at all — drop the plain
+        // WireGuard WARP candidates (their handshake is bare UDP on the wire);
+        // MASQUE (TCP-443 capable) and gool (WG-over-MASQUE) stay. Never let
+        // the filter empty the chain.
+        if (settings.scanMode == "stealth") {
+            val filtered = chain.filterNot {
+                it.fromSubscription == WarpRegistrar.WARP_SOURCE && it.transport == "tcp"
+            }
+            if (filtered.isNotEmpty()) {
+                ServiceBridge.log("INFO", "scan mode stealth: ${chain.size - filtered.size} UDP candidate(s) skipped")
+                chain = filtered
+            }
+        }
         if (chain.isEmpty()) {
             fail("no profile available")
             return
@@ -246,7 +271,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     // profile's h2/h3 label no longer chooses a boot mode.
                     ServiceBridge.log(
                         "INFO",
-                        "booting WARP engine (racing TCP-443 + UDP-443 sweeps)"
+                        "booting WARP engine (racing TCP-443 + UDP-443 sweeps, scan: ${settings.scanMode})"
                     )
                     val bootStart = android.os.SystemClock.elapsedRealtime()
                     // single-flight boot shared with the app-open prewarm —
@@ -257,6 +282,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     // the chain moves on instead of hanging forever.
                     WarpMasqueEngine.boot(
                         this,
+                        scanMode = settings.scanMode,
                         onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
                     ).getOrThrow()
                     ServiceBridge.log(
@@ -319,6 +345,12 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     ServiceBridge.state.value = TunnelState.ACTIVE
                     profileStore.select(candidate.id)
                     profileStore.setLastGood(candidate.id)
+                    // v1.3.0 per-network memory (Aether-style): which profile
+                    // last VERIFIED on this network class (wifi vs cellular)
+                    val netClass = currentNetworkClass()
+                    if (netClass.isNotEmpty()) {
+                        profileStore.setLastGoodForNetwork(netClass, candidate.id)
+                    }
                     ServiceBridge.startStatsClients()
                     startNotif(
                         getString(R.string.notif_active) +
@@ -364,20 +396,42 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
     }
 
-    private suspend fun buildChain(): List<Profile> {
+    private suspend fun buildChain(protocol: String): List<Profile> {
         val selectedId = profileStore.selectedId.first()
         // v1.2.4: the auto-managed WARP family is ONE method with several
         // transports — always rank it (H2/TCP first, then H3/UDP, then the WG
         // ports), even when autoFallback is off: picking "Cloudflare WARP
         // (Free)" selects the method, not a specific UDP-vs-TCP wire format.
         // User-imported profiles keep strict autoFallback semantics.
+        // v1.3.0: a pinned protocol (masque/wg/gool) bypasses autoFallback —
+        // the user explicitly chose what to try first; the smart chain still
+        // rides behind it as the safety net (see FallbackEngine).
         val selectedIsWarp = profileStore.snapshot()
             .firstOrNull { it.id == selectedId }
-            ?.fromSubscription == WarpRegistrar.WARP_SOURCE
-        return if (settings.autoFallback || selectedIsWarp) {
-            FallbackEngine(profileStore).chain(selectedId, maxCandidates = MAX_CANDIDATES)
+            ?.fromSubscription in setOf(WarpRegistrar.WARP_SOURCE, WarpRegistrar.WARP_GOOL_SOURCE)
+        return if (protocol != FallbackEngine.PROTOCOL_SMART || settings.autoFallback || selectedIsWarp) {
+            FallbackEngine(profileStore).chain(
+                selectedId,
+                protocol = protocol,
+                networkClass = currentNetworkClass(),
+                maxCandidates = MAX_CANDIDATES,
+            )
         } else {
             profileStore.snapshot().filter { it.id == selectedId }
+        }
+    }
+
+    /**
+     * "wifi" | "cell" — the class of the best underlying (non-VPN) network
+     * right now; keys the per-network last-good memory (v1.3.0).
+     */
+    private fun currentNetworkClass(): String {
+        val network = bestUnderlyingNetwork() ?: return ""
+        val caps = getSystemService(ConnectivityManager::class.java)
+            .getNetworkCapabilities(network) ?: return ""
+        return when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> FallbackEngine.NETWORK_CELL
+            else -> FallbackEngine.NETWORK_WIFI // wifi + ethernet
         }
     }
 
