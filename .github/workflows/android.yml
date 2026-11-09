@@ -315,8 +315,8 @@ jobs:
           # v1.6.0 ABI splits: app-<abi>-<kind>.apk + app-universal-<kind>.apk
           for kind in release debug; do
             for f in app/build/outputs/apk/$kind/*.apk; do
-              base=$(basename "$f") # e.g. app-arm64-v8a-release.apk
-              tag="${base#app-}"; tag="${tag%-$kind.apk}" # arm64-v8a | universal
+              base=$(basename "$f") # e.g. app-arm64-v8a-release.apk / ...-release-unsigned.apk
+              tag="${base#app-}"; tag="${tag%-$kind.apk}"; tag="${tag%-unsigned}" # arm64-v8a | universal
               if [ "$kind" = "release" ]; then
                 cp "$f" "dist/Kuku-${VER}-${tag}.apk"
               else
