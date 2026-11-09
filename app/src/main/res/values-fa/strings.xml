@@ -60,6 +60,14 @@
     <string name="scan_ironclad_desc">طولانی‌ترین و پایدارترین جست‌وجو — همهٔ مسیرها، همهٔ نقاط پایانی.</string>
     <string name="conn_applies_next">از اتصال بعدی اعمال می‌شود.</string>
 
+    <!-- Psiphon backends (v1.5.0) -->
+    <string name="conn_psiphon">سایفون</string>
+    <string name="conn_psiphon_desc">شبکهٔ سایفون (هستهٔ همراه برنامه) — روش‌های چرخشی کلاینت/سرور مخصوص شبکه‌های فیلترشده. از WARP کندتر است ولی به‌مراتب سخت‌تر بلاک می‌شود.</string>
+    <string name="conn_kuku_psiphon">کوکو → سایفون</string>
+    <string name="conn_kuku_psiphon_desc">سایفون از دل تونل WARP — برای شبکه‌هایی که خودِ سایفون بلاک است ولی WARP بیرون می‌زند.</string>
+    <string name="psiphon_profile_name">سایفون (رایگان)</string>
+    <string name="psiphon_chain_profile_name">کوکو → سایفون</string>
+
     <!-- Profiles -->
     <string name="tab_profiles">پروفایل‌ها</string>
     <string name="tab_home">خانه</string>
@@ -125,6 +133,7 @@
     <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
     <string name="about_changes">تغییرات اخیر</string>
     <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_150">1.5.0 — سایفون و کوکو → سایفون: دو روش جدید بدون سرور</string>
     <string name="about_change_140">1.4.0 — توربو FLUX: چرخش زندهٔ چندمسیره، همیشه روی سریع‌ترین لبه</string>
     <string name="about_change_130">1.3.0 — صفحهٔ اتصال: انتخاب روش، حالت جست‌وجو و WARP×2 (گول)</string>
     <string name="about_licenses">متن‌باز: sing-box (GPL-3.0) · usque (MIT) · Go/gVisor (BSD)</string>

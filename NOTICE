@@ -19,3 +19,6 @@ distribution.
 Trademark note: "Kuku VPN" is the name of THIS project. It has no affiliation
 with, endorsement from, or ownership claim over sing-box, Cloudflare, or any
 other upstream project. See TRADEMARK.md.
+
+Psiphon tunnel core (CluvexStudio/psiphon-tunnel-core fork of Psiphon-Labs/psiphon-tunnel-core)
+— GPLv3, built by CI with Go 1.22.12 and shipped as a separate process binary (libpsiphon.so).

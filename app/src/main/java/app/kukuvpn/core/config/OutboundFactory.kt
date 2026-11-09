@@ -21,7 +21,15 @@ object OutboundFactory {
     fun build(profile: Profile, tag: String = "proxy"): JsonObject = buildJsonObject {
         // MASQUE-engine candidates ride the in-process warpcore SOCKS5 proxy:
         // sing-box → 127.0.0.1:SOCKS_PORT → MASQUE(HTTP/3|HTTP/2) → Cloudflare.
-        val masque = profile.type == ProfileType.WIREGUARD && profile.transport.startsWith("masque")
+        // v1.5.0: the Psiphon transports ride the Psiphon child-process SOCKS
+        // the same way (127.0.0.1:1087, or through the WARP underlay when
+        // chained — the chaining lives inside the Psiphon core's config).
+        val masque = profile.type == ProfileType.WIREGUARD &&
+            (
+                profile.transport.startsWith("masque") ||
+                    profile.transport == "psiphon" ||
+                    profile.transport == "kuku-psiphon"
+                )
         put("type", if (masque) "socks" else profile.type.name.lowercase())
         put("tag", tag)
         put("server", profile.host)

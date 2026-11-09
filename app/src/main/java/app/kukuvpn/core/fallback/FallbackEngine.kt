@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.first
  *   masque — the MASQUE pair first, then the smart chain as a safety net
  *   wg     — the plain WireGuard WARP ports first, then the smart chain
  *   gool   — the WARP×2 inner-tunnel profile first, then the smart chain
+ *   psiphon / kuku-psiphon — the bundled Psiphon core first (v1.5.0),
+ *                            then the smart chain
  *
  * A pinned method that cannot connect must NEVER leave the app offline, so
  * every pin keeps the smart chain behind it — the pin decides what is tried
@@ -93,6 +95,8 @@ class FallbackEngine(private val store: ProfileStore) {
             PROTOCOL_MASQUE -> pool.filter { isWarp(it) && isMasque(it) }
             PROTOCOL_WG -> pool.filter { isWarp(it) && !isMasque(it) }
             PROTOCOL_GOOL -> goolProfiles
+            PROTOCOL_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_TRANSPORT }
+            PROTOCOL_KUKU_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
             else -> emptyList()
         }
 
@@ -132,6 +136,13 @@ class FallbackEngine(private val store: ProfileStore) {
         const val PROTOCOL_MASQUE = "masque"
         const val PROTOCOL_WG = "wg"
         const val PROTOCOL_GOOL = "gool"
+        const val PROTOCOL_PSIPHON = "psiphon"
+        const val PROTOCOL_KUKU_PSIPHON = "kuku-psiphon"
+
+        // Psiphon backend markers (v1.5.0) — literals mirror PsiphonEngine
+        private const val PSIPHON_SOURCE = "psiphon"
+        private const val PSIPHON_TRANSPORT = "psiphon"
+        private const val PSIPHON_CHAIN_TRANSPORT = "kuku-psiphon"
 
         // network classes (per-network memory)
         const val NETWORK_WIFI = "wifi"

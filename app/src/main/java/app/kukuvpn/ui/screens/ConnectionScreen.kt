@@ -66,6 +66,8 @@ fun ConnectionScreen(onBack: () -> Unit) {
                     Triple(FallbackEngine.PROTOCOL_MASQUE, R.string.conn_masque, R.string.conn_masque_desc),
                     Triple(FallbackEngine.PROTOCOL_WG, R.string.conn_wg, R.string.conn_wg_desc),
                     Triple(FallbackEngine.PROTOCOL_GOOL, R.string.conn_gool, R.string.conn_gool_desc),
+                    Triple(FallbackEngine.PROTOCOL_PSIPHON, R.string.conn_psiphon, R.string.conn_psiphon_desc),
+                    Triple(FallbackEngine.PROTOCOL_KUKU_PSIPHON, R.string.conn_kuku_psiphon, R.string.conn_kuku_psiphon_desc),
                 )
                 methods.forEach { (value, title, desc) ->
                     Row(

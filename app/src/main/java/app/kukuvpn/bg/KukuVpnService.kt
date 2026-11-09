@@ -27,6 +27,7 @@ import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.core.fallback.FallbackEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
 import app.kukuvpn.core.warp.WarpMasqueEngine
+import app.kukuvpn.core.psiphon.PsiphonEngine
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
@@ -199,6 +200,15 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 ServiceBridge.log("WARN", "WARP×2 identity: ${e.message} — falling back to Smart")
             }
         }
+        // v1.5.0 Psiphon backends: lazily register the bundled-Psiphon
+        // candidates (standalone + Kuku→Psiphon) — same lazy pattern as gool
+        if (protocol == FallbackEngine.PROTOCOL_PSIPHON || protocol == FallbackEngine.PROTOCOL_KUKU_PSIPHON) {
+            try {
+                PsiphonEngine.ensureProfiles(this)
+            } catch (e: Exception) {
+                ServiceBridge.log("WARN", "psiphon profiles: ${e.message} — falling back to Smart")
+            }
+        }
         startNotif(getString(R.string.notif_connecting), ongoing = true)
 
         ServiceBridge.resetSession()
@@ -300,6 +310,48 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     continue
                 }
             }
+            // v1.5.0 Psiphon candidates boot the bundled Psiphon core (child
+            // process, SOCKS on 127.0.0.1:1087). The chained variant rides the
+            // WARP engine's underlay, so the engine must be up first.
+            val isPsiphon = candidate.fromSubscription == PsiphonEngine.SOURCE
+            if (isPsiphon) {
+                val chained = candidate.transport == PsiphonEngine.TRANSPORT_CHAINED
+                if (chained && !WarpMasqueEngine.isRunning()) try {
+                    ServiceBridge.log("INFO", "booting WARP underlay for Kuku→Psiphon (scan: ${settings.scanMode})")
+                    WarpMasqueEngine.boot(
+                        this,
+                        scanMode = settings.scanMode,
+                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+                    ).getOrThrow()
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) return
+                    lastCandidateError = e.message
+                    ServiceBridge.log("ERROR", "${candidate.name}: WARP underlay: ${e.message}")
+                    continue
+                }
+                if (!chained && WarpMasqueEngine.isRunning()) {
+                    // standalone Psiphon owns the exit — a warm WARP engine
+                    // would sit unused on the device's network
+                    WarpMasqueEngine.stop()
+                }
+                try {
+                    PsiphonEngine.boot(
+                        this,
+                        upstream = chained,
+                        onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s") },
+                    ).getOrThrow()
+                    ServiceBridge.log(
+                        "INFO",
+                        "psiphon core ready (socks 127.0.0.1:${PsiphonEngine.SOCKS_PORT}${if (chained) ", underlay WARP" else ""})"
+                    )
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) return
+                    lastCandidateError = e.message
+                    ServiceBridge.log("ERROR", "${candidate.name}: psiphon core: ${e.message}")
+                    if (chained) WarpMasqueEngine.stop()
+                    continue
+                }
+            }
             // a cancel that landed during the (blocking, ≤~20s) engine
             // boot must not march on into a doomed core start
             if (stopping.get()) return
@@ -368,6 +420,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     lastError = e
                     ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
                     if (isMasque) WarpMasqueEngine.stop()
+                    if (isPsiphon) {
+                        PsiphonEngine.stop()
+                        if (candidate.transport == PsiphonEngine.TRANSPORT_CHAINED) WarpMasqueEngine.stop()
+                    }
                     stopCore()
                 }
             }
@@ -543,6 +599,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         ServiceBridge.stopStatsClients()
         stopCore()
         WarpMasqueEngine.stop()
+        PsiphonEngine.stop()
         commandServer?.let { server ->
             runCatching { server.close() }
             runCatching { Seq.destroyRef(server.refnum) }

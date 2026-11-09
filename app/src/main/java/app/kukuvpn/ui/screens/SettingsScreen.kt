@@ -226,6 +226,8 @@ private fun protocolSummary(protocol: String): String = when (protocol) {
     "masque" -> stringResource(R.string.conn_masque)
     "wg" -> stringResource(R.string.conn_wg)
     "gool" -> stringResource(R.string.conn_gool)
+    "psiphon" -> stringResource(R.string.conn_psiphon)
+    "kuku-psiphon" -> stringResource(R.string.conn_kuku_psiphon)
     else -> stringResource(R.string.conn_smart)
 }
 

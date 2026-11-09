@@ -13,8 +13,8 @@ android {
         applicationId = "app.kukuvpn"
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.4.1"
+        versionCode = 17
+        versionName = "1.5.0"
         resourceConfigurations += listOf("en", "fa")
     }
 
@@ -74,6 +74,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // v1.5.0: the Psiphon core (libpsiphon.so) is EXECUTED as a child
+        // process from applicationInfo.nativeLibraryDir — that only works with
+        // legacy (extracted) native libs, like every Xray-class Android client.
+        jniLibs {
+            useLegacyPackaging = true
         }
     }
 }
