@@ -110,24 +110,24 @@ jobs:
 
       # v1.5.0 Psiphon backend: the tunnel core ships as a per-ABI ELF that the
       # app EXECUTES as a child process (like the Xray clients do). The core
-      # does not compile on modern Go, so it gets its own pinned 1.22.12
-      # toolchain — the same version the reference clients build it with.
-      - name: setup go 1.22 (psiphon-tunnel-core does not build on >= 1.25)
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22.12"
-
+      # does not compile on modern Go (wlynxg/anet: "invalid reference to
+      # net.zoneCache"), and newer toolchains AUTO-SWITCH to 1.26 via the
+      # module graph (GOTOOLCHAIN=auto) — so this step pins go1.22.12 by its
+      # absolute binary path with GOTOOLCHAIN=local. Run #19 failure history.
       - name: build psiphon core (console client, 2 ABIs)
         run: |
           set -e
+          curl -fsSL https://go.dev/dl/go1.22.12.linux-amd64.tar.gz -o /tmp/go122.tar.gz
+          mkdir -p /tmp/go122 && tar -C /tmp/go122 --strip-components=1 -xzf /tmp/go122.tar.gz
           git -c core.longpaths=true clone --quiet --depth 50 --branch shirokhorshid \
             https://github.com/CluvexStudio/psiphon-tunnel-core.git /tmp/psiphon
           git -C /tmp/psiphon checkout --quiet 83aa73b9b982e7421e00117f5b0c5aceb5dda452
           out=/tmp/psiphon-out
           mkdir -p "$out/arm64-v8a" "$out/armeabi-v7a"
           cd /tmp/psiphon/ConsoleClient
-          GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out/arm64-v8a/libpsiphon.so" .
-          GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out/armeabi-v7a/libpsiphon.so" .
+          export GOTOOLCHAIN=local
+          GOOS=android GOARCH=arm64 CGO_ENABLED=0 /tmp/go122/bin/go build -trimpath -ldflags "-s -w" -o "$out/arm64-v8a/libpsiphon.so" .
+          GOOS=android GOARCH=arm GOARM=7 CGO_ENABLED=0 /tmp/go122/bin/go build -trimpath -ldflags "-s -w" -o "$out/armeabi-v7a/libpsiphon.so" .
           ls -lh "$out"/*/
 
       - name: upload psiphon artifact
