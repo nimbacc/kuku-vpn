@@ -462,6 +462,19 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             commandServer = server
         }
         val config = SingBoxConfigBuilder.build(profile, settings) // JSON string
+        // v1.4.0 FLUX turbo: when the engine rides, the config carries the
+        // urltest group over the primary + background socks paths. Members
+        // boot in the background AFTER the engine is ready and join the
+        // rotation as they verify — traffic starts on the primary either way.
+        val fluxPorts = SingBoxConfigBuilder.fluxPortsFor(profile, settings)
+        if (fluxPorts.isNotEmpty()) {
+            ServiceBridge.log(
+                "INFO",
+                "FLUX turbo: urltest group over socks " +
+                    (listOf(WarpMasqueEngine.SOCKS_PORT) + fluxPorts).joinToString("/") +
+                    " — traffic auto-switches to the fastest live path",
+            )
+        }
         val service = Libbox.newService(config, this) // throws on bad config
         service.start() // throws if the core cannot boot (port busy, missing fields…)
         boxService = service

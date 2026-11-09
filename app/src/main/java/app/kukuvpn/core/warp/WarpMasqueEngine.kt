@@ -46,6 +46,22 @@ object WarpMasqueEngine {
     const val SOCKS_PORT = 2085
 
     /**
+     * v1.4.0 FLUX turbo: extra engine paths the background sweep boots after
+     * the primary is live (socks ports SOCKS_PORT+1, SOCKS_PORT+2). The
+     * sing-box urltest group ("proxy-fast", see SingBoxConfigBuilder) then
+     * hot-swaps traffic onto whichever path currently answers fastest —
+     * the FLUX-style always-on-the-fastest-edge rotation, plus a free
+     * resilience upgrade when an edge degrades mid-session.
+     * Sandbox-proven (v1.4.0): Cloudflare accepts concurrent long-lived
+     * MASQUE sessions for the SAME device identity; the primary tunnel
+     * carried traffic across interleaved rounds while an extra stayed live,
+     * and a sing-box urltest over 2085/2086 + a deliberately dead 2087
+     * passed 24/24 real requests (first-member fallback + dead-member
+     * tolerance + live rotation all verified).
+     */
+    val FLUX_SOCKS_PORTS = listOf(SOCKS_PORT + 1, SOCKS_PORT + 2)
+
+    /**
      * v1.2.7 hard cap on a full boot, enforced on the Kotlin side as a
      * second net under the Go sweep's own 45s cap. The first "eternal
      * Connecting" field report was a Go-side deadlock that outlived every
@@ -179,4 +195,13 @@ object WarpMasqueEngine {
 
     fun isRunning(): Boolean =
         runCatching { Warpcore.isRunning() }.getOrDefault(false) && started
+
+    /**
+     * v1.4.0 FLUX turbo: how many background paths are currently live
+     * (0..FLUX_SOCKS_PORTS.size). Extras boot in the background AFTER the
+     * engine reports ready, so this is 0 right after boot and grows as the
+     * sweep validates tunnels — logs only, nothing waits on it.
+     */
+    fun fluxPathCount(): Int =
+        runCatching { Warpcore.extraCount().toInt() }.getOrDefault(0)
 }

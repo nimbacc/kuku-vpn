@@ -4,6 +4,7 @@ import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.Profile
+import app.kukuvpn.data.ProfileType
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -30,8 +31,24 @@ object SingBoxConfigBuilder {
     const val TUN_TAG = "tun-in"
     const val MIXED_TAG = "mixed-in"
 
+    /**
+     * v1.4.0 FLUX turbo: the urltest group that owns the default route when
+     * the engine rides. Members: the verified primary socks ("proxy" FIRST —
+     * before the first urltest round completes, sing-box's Select() falls
+     * back to the first member, so the very first request always lands on
+     * the already-verified path), then the engine's background paths
+     * (flux-x1/x2 on SOCKS_PORT+1/+2 — they come up seconds after the
+     * engine reports ready and JOIN the rotation as they go live; a member
+     * that never comes up simply fails its checks and is never selected).
+     * Sandbox-proven 1.11.15: 24/24 real requests through a group with one
+     * dead member, first-request fallback + rotation verified.
+     */
+    const val FLUX_TAG = "proxy-fast"
+
     /** Returns the config as a JSON string — exactly what Libbox.newService expects. */
     fun build(profile: Profile, settings: AppSettings): String = buildJsonObject {
+        val fluxPorts = fluxPortsFor(profile, settings)
+        val routeTarget = if (fluxPorts.isNotEmpty()) FLUX_TAG else "proxy"
         putJsonObject("log") {
             put("level", "info")
             put("timestamp", true)
@@ -58,7 +75,10 @@ object SingBoxConfigBuilder {
                 add(buildJsonObject {
                     put("tag", "dns-remote")
                     put("address", "https://1.1.1.1/dns-query")
-                    put("detour", "proxy")
+                    // FLUX: DNS rides the urltest group too, so lookups take the
+                    // currently-fastest path (falling back to "proxy" when the
+                    // group does not exist for this profile)
+                    put("detour", routeTarget)
                 })
                 add(buildJsonObject {
                     put("tag", "dns-local")
@@ -116,6 +136,33 @@ object SingBoxConfigBuilder {
                     put("version", "5")
                 })
             }
+            // v1.4.0 FLUX turbo: the engine's background paths + the urltest
+            // group. Outbounds pointing at a not-yet-open loopback port are
+            // harmless (creation never dials; failed urltest checks are
+            // instant connection-refused and the member is never selected).
+            if (fluxPorts.isNotEmpty()) {
+                fluxPorts.forEachIndexed { i, port ->
+                    add(buildJsonObject {
+                        put("type", "socks")
+                        put("tag", "flux-x${i + 1}")
+                        put("server", "127.0.0.1")
+                        put("server_port", port)
+                        put("version", "5")
+                    })
+                }
+                add(buildJsonObject {
+                    put("type", "urltest")
+                    put("tag", FLUX_TAG)
+                    putJsonArray("outbounds") {
+                        add("proxy") // FIRST: the pre-rotation fallback member
+                        fluxPorts.forEachIndexed { i, _ -> add("flux-x${i + 1}") }
+                    }
+                    put("url", "http://www.gstatic.com/generate_204")
+                    put("interval", "2m")
+                    put("tolerance", 50)
+                    put("idle_timeout", "30m")
+                })
+            }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
             add(buildJsonObject { put("type", "dns"); put("tag", "dns-out") })
         }
@@ -146,8 +193,26 @@ object SingBoxConfigBuilder {
                     put("outbound", "direct")
                 })
             }
-            put("final", "proxy")
+            put("final", routeTarget)
             put("auto_detect_interface", true)
         }
     }.toString()
+
+    /**
+     * v1.4.0 FLUX turbo membership rule: engine-riding candidates (MASQUE
+     * socks outbounds and the gool inner-hop, which rides the engine's
+     * underlay) get the background paths + the urltest group. Plain
+     * WireGuard and imported servers run without the engine — no group.
+     * The H2/stealth transport has only ONE usable edge (v1.2.7 discovery),
+     * so a stealth session is single-path by design: no group, no probes,
+     * nothing but plain HTTPS on TCP 443 — exactly the DPI footprint
+     * stealth promises.
+     */
+    fun fluxPortsFor(profile: Profile, settings: AppSettings): List<Int> {
+        val engineRides = profile.type == ProfileType.WIREGUARD &&
+            (profile.transport.startsWith("masque") || profile.transport == WarpRegistrar.TRANSPORT_GOOL_WG)
+        if (!engineRides) return emptyList()
+        if (settings.scanMode == "stealth") return emptyList()
+        return WarpMasqueEngine.FLUX_SOCKS_PORTS
+    }
 }

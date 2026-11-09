@@ -77,6 +77,32 @@ const (
 	// netTun.Close(). A pathological close must never wedge the sweep —
 	// leaking one device beats deadlocking Start() forever (v1.2.7).
 	closeDrainWait = 5 * time.Second
+
+	// v1.4.0 FLUX turbo: after the primary tunnel is live (the user is
+	// already online), the engine keeps sweeping the REMAINING endpoints in
+	// the background and holds up to extraMax ADDITIONAL validated tunnels,
+	// each behind its own local SOCKS port (base+1..base+extraMax). The
+	// sing-box urltest group then hot-swaps traffic to whichever path
+	// currently answers fastest — the FLUX-style "always on the fastest
+	// edge" rotation, and a free resilience upgrade: if the primary edge
+	// degrades, the group simply moves the traffic to a live extra path.
+	// Extras are pure enrichment: nothing in this file's connect path
+	// (the racing sweep + ownership model v1.2.5-v1.2.7 stabilized) waits
+	// on them or depends on them.
+	extraMax = 2
+
+	// per-extra probe budget: extras probe endpoints that the boot sweep
+	// ALREADY rejected seconds ago (handshake failures are per-edge, not
+	// transient), so a long retry window mostly spams Cloudflare handshakes
+	// for nothing. A validated extra answers in 0.1-2s (v1.4.0 sandbox:
+	// 90-95ms); 6s leaves room for one cold retry without hammering.
+	extraBudget = 6 * time.Second
+
+	// hard cap for the whole background extras sweep.
+	extraOverallCap = 40 * time.Second
+
+	// how long bootExtras waits for an accepted extra's SOCKS listener.
+	extraListenWait = 5 * time.Second
 )
 
 // sweepEndpointIPs — known-good WARP anycast edges for MASQUE over
@@ -192,7 +218,17 @@ func scanParamsFor(mode string) scanParams {
 type engineState struct {
 	cancel   context.CancelFunc
 	srv      *internal.SOCKS5Server
+	extras   []*extraState // v1.4.0 FLUX background tunnels (socks base+1..)
 	finished chan struct{} // closed exactly once, when the owning boot returns
+}
+
+// extraState — one live FLUX background tunnel: its cancel (parented to the
+// engine root, so Stop's rootCancel unwinds it), its SOCKS listener and its
+// netstack device (for closeTunDraining at teardown).
+type extraState struct {
+	cancel context.CancelFunc
+	srv    *internal.SOCKS5Server
+	dev    tun.Device
 }
 
 var (
@@ -203,6 +239,25 @@ var (
 
 // IsRunning reports whether the engine currently holds a tunnel.
 func IsRunning() bool { return isRunning.Load() }
+
+// ExtraCount reports how many FLUX background tunnels are currently live
+// (the primary tunnel is not counted). Bounded by extraMax; 0 until the
+// background sweep starts validating extras. gomobile binds the return as
+// a Java long.
+func ExtraCount() int {
+	mu.Lock()
+	defer mu.Unlock()
+	if current == nil {
+		return 0
+	}
+	n := 0
+	for _, ex := range current.extras {
+		if ex != nil {
+			n++
+		}
+	}
+	return n
+}
 
 // Register creates a fresh WARP-over-MASQUE identity (account + enrolled
 // device key) and persists it to <configDir>/config.json. Call once;
@@ -475,7 +530,12 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 							case winnerCh <- attemptResult{ep: ep, ctx: attemptCtx, cancel: attemptCancel, dev: attemptTun, net: attemptNet}:
 								// we won; the wave cleanup skips us
 							default:
-								// another endpoint already won — fold
+								// another endpoint already won — cancel ONLY. The device is still owned
+								// by the wave registry (the ONE closer in this sweep): either the
+								// registry still holds it and the wave teardown closes it, or teardown
+								// already drain-closed it — closing here too would double-close
+								// (netTun.Close panics on the second close, proven in the v1.4.0
+								// sandbox before shipping).
 								attemptCancel()
 							}
 							return
@@ -529,6 +589,291 @@ func sweepTransport(rootCtx context.Context, stop <-chan struct{}, startDeadline
 	// the last wave's failure for the boot error report
 	return attemptResult{}, fmt.Errorf("%s: tunnel did not come up on any of %d endpoint(s) in %d wave(s): last: %v",
 		transportName(useHTTP2), len(candidates), totalWaves, lastErr)
+}
+
+// addrIP extracts the IP string from a sweep endpoint address ("" for
+// anything else).
+func addrIP(ep net.Addr) string {
+	switch a := ep.(type) {
+	case *net.UDPAddr:
+		return a.IP.String()
+	case *net.TCPAddr:
+		return a.IP.String()
+	}
+	return ""
+}
+
+// waitLocalPort polls a loopback listener until it accepts (or the context
+// / timeout ends).
+func waitLocalPort(ctx context.Context, port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return false
+		}
+		probe, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(port)), 300*time.Millisecond)
+		if err == nil {
+			_ = probe.Close()
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+// probeTunnel proves a candidate extra tunnel carries real traffic and
+// returns how long the first successful round-trip took (the FLUX probe
+// RTT, logged for visibility). Mirrors the sweep's dial test: each dial
+// races a hard timer for the remaining budget; unlike the sweep, a failed
+// dial does NOT cancel the attempt — MaintainTunnel (AlwaysReconnect)
+// self-heals and the next dial retries, so a tunnel that comes up a few
+// seconds late is still harvested.
+func probeTunnel(ctx context.Context, ns *netstack.Net, hardDeadline time.Time, budget time.Duration) (time.Duration, bool) {
+	deadline := time.Now().Add(budget)
+	if deadline.After(hardDeadline) {
+		deadline = hardDeadline
+	}
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return 0, false
+		}
+		t0 := time.Now()
+		dialDone := make(chan bool, 1)
+		go func() {
+			testConn, err := ns.DialContext(ctx, "tcp", net.JoinHostPort("1.1.1.1", "53"))
+			if err == nil {
+				_ = testConn.Close()
+			}
+			dialDone <- err == nil
+		}()
+		timer := time.NewTimer(time.Until(deadline))
+		select {
+		case ok := <-dialDone:
+			timer.Stop()
+			if ok {
+				return time.Since(t0), true
+			}
+		case <-timer.C:
+			return 0, false
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, false
+		}
+		time.Sleep(400 * time.Millisecond)
+	}
+	return 0, false
+}
+
+// extraOffer — a validated background tunnel plus its probe RTT.
+type extraOffer struct {
+	res attemptResult
+	rtt time.Duration
+}
+
+// bootExtras — v1.4.0 FLUX turbo background sweep.
+//
+// Runs AFTER startEngine returned success (the primary tunnel is verified
+// and its SOCKS port accepts). Sweeps the remaining endpoints of the
+// WINNING transport (same wire format the DPI box already tolerates),
+// validates each with a real round-trip, and accepts up to extraMax of
+// them, each behind its own SOCKS listener on base+1..base+extraMax.
+// Accepted tunnels are registered in st.extras (Stop() closes their
+// listeners; rootCancel unwinds their MaintainTunnel goroutines). Every
+// unaccepted attempt is cancelled and drain-closed when the collector
+// exits, so nothing leaks.
+//
+// Ownership discipline mirrors the v1.2.5 model: before every accept the
+// collector re-checks that the engine still owns its slot (a Stop() that
+// landed mid-sweep turns this into a no-op) and all tunnels hang off
+// rootCtx, so engine teardown never needs to know this goroutine exists.
+func bootExtras(rootCtx context.Context, st *engineState, tlsConfig *tls.Config, localAddresses []netip.Addr, dnsAddrs []netip.Addr, winH2 bool, winnerIP string, basePort int) {
+	transport := transportName(winH2)
+
+	// tracked live attempts: anything still in here at exit is folded
+	type liveAttempt struct {
+		res attemptResult
+	}
+	var (
+		liveMu  sync.Mutex
+		live    []liveAttempt
+		spawnWG sync.WaitGroup
+	)
+
+	fold := func(res attemptResult) {
+		res.cancel()
+		_ = closeTunDraining(res.dev)
+	}
+	unaccept := func(res attemptResult) {
+		liveMu.Lock()
+		for i, a := range live {
+			if a.res.dev == res.dev {
+				live = append(live[:i], live[i+1:]...)
+				break
+			}
+		}
+		liveMu.Unlock()
+	}
+	ownsSlot := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return current == st && rootCtx.Err() == nil
+	}
+
+	candidates := endpointCandidates(winH2)
+	taken := map[string]bool{winnerIP: true}
+	spawned := 0
+	offers := make(chan extraOffer, len(candidates))
+	for _, ep := range candidates {
+		ip := addrIP(ep)
+		if ip == "" || taken[ip] {
+			continue
+		}
+		taken[ip] = true
+		spawned++
+		spawnWG.Add(1)
+		go func(ep net.Addr) {
+			defer spawnWG.Done()
+			attemptCtx, attemptCancel := context.WithCancel(rootCtx)
+			dev, ns, err := netstack.CreateNetTUN(localAddresses, dnsAddrs, defaultMTU)
+			if err != nil {
+				attemptCancel()
+				return
+			}
+			res := attemptResult{ep: ep, ctx: attemptCtx, cancel: attemptCancel, dev: dev, net: ns}
+			liveMu.Lock()
+			live = append(live, liveAttempt{res: res})
+			liveMu.Unlock()
+
+			go api.MaintainTunnel(attemptCtx, api.MaintainTunnelConfig{
+				TLSConfig:         tlsConfig,
+				KeepalivePeriod:   defaultKeepalive,
+				InitialPacketSize: 0,
+				Endpoint:          ep,
+				Device:            api.NewNetstackAdapter(dev),
+				MTU:               defaultMTU,
+				ReconnectDelay:    defaultReconnect,
+				AlwaysReconnect:   true,
+				UseHTTP2:          winH2,
+			})
+
+			rtt, ok := probeTunnel(attemptCtx, ns, time.Now().Add(extraOverallCap), extraBudget)
+			if ok {
+				offers <- extraOffer{res: res, rtt: rtt}
+			}
+			// on failure: leave in `live` — the collector's exit fold tears
+			// it down (cancel + drain-close) once all offers are in
+		}(ep)
+	}
+	if spawned == 0 {
+		log.Printf("warpcore: FLUX — no extra endpoint candidates for %s, single-path session", transport)
+		return
+	}
+	go func() {
+		spawnWG.Wait()
+		close(offers) // every attempt settled: offered or failed its probe
+	}()
+	log.Printf("warpcore: FLUX — sweeping %d extra path candidate(s) (%s), target + tunnels on socks ports %d..%d",
+		spawned, transport, basePort+1, basePort+extraMax)
+
+	deadline := time.Now().Add(extraOverallCap)
+	accepted := 0
+acceptLoop:
+	for accepted < extraMax {
+		remain := time.Until(deadline)
+		if remain <= 0 || !ownsSlot() {
+			break
+		}
+		select {
+		case off, open := <-offers:
+			if !open {
+				break acceptLoop // all attempts settled, none left to accept
+			}
+			if !ownsSlot() {
+				fold(off.res)
+				continue
+			}
+			port := basePort + 1 + accepted
+			resolver := &internal.TunnelDNSResolver{
+				DNSAddrs: dnsAddrs,
+				Timeout:  defaultDNSTimeout,
+				TunNet:   off.res.net,
+			}
+			srv, err := internal.NewSOCKS5Server(internal.SOCKS5Config{
+				Addr:       net.JoinHostPort("127.0.0.1", fmt.Sprint(port)),
+				Resolver:   resolver,
+				TunNet:     off.res.net,
+				UDPTimeout: defaultUDPTtl,
+				Logger:     log.New(internal.NewTZStampWriter(os.Stderr), "warpcore: ", 0),
+			})
+			if err != nil {
+				log.Printf("warpcore: FLUX extra on %s: socks server: %v", off.res.ep, err)
+				fold(off.res)
+				continue
+			}
+			// register BEFORE the listener starts, so a Stop() racing this
+			// accept always finds and closes it
+			mu.Lock()
+			if current != st || rootCtx.Err() != nil {
+				mu.Unlock()
+				_ = srv.Stop()
+				fold(off.res)
+				return
+			}
+			st.extras = append(st.extras, &extraState{cancel: off.res.cancel, srv: srv, dev: off.res.dev})
+			mu.Unlock()
+			unaccept(off.res)
+
+			go func() {
+				if err := srv.Start(); err != nil && rootCtx.Err() == nil {
+					log.Printf("warpcore: FLUX extra socks server exited: %v", err)
+				}
+			}()
+			if !waitLocalPort(rootCtx, port, extraListenWait) {
+				_ = srv.Stop()
+				mu.Lock()
+				for i, ex := range st.extras {
+					if ex.srv == srv {
+						st.extras = append(st.extras[:i], st.extras[i+1:]...)
+						break
+					}
+				}
+				mu.Unlock()
+				fold(off.res)
+				continue
+			}
+			accepted++
+			log.Printf("warpcore: FLUX extra path %d/%d live (socks 127.0.0.1:%d, endpoint=%s, probe=%dms)",
+				accepted, extraMax, port, off.res.ep, off.rtt.Milliseconds())
+		case <-rootCtx.Done():
+			// engine stopped: Stop() closes listeners + rootCancel unwinds
+			// the tunnels; still fold whatever is parked in `live`
+			liveMu.Lock()
+			rest := live
+			live = nil
+			liveMu.Unlock()
+			for _, a := range rest {
+				a.res.cancel()
+				_ = closeTunDraining(a.res.dev)
+			}
+			return
+		case <-time.After(remain):
+		}
+	}
+
+	// fold every attempt we spawned but never accepted
+	liveMu.Lock()
+	rest := live
+	live = nil
+	liveMu.Unlock()
+	for _, a := range rest {
+		a.res.cancel()
+		_ = closeTunDraining(a.res.dev)
+	}
+	if accepted > 0 {
+		log.Printf("warpcore: FLUX ready — %d extra path(s) behind the primary", accepted)
+	} else {
+		log.Printf("warpcore: FLUX — no extra path validated, single-path session")
+	}
 }
 
 // Start brings up the MASQUE tunnel over ONE transport (kept for tools and
@@ -743,8 +1088,24 @@ func startEngine(configDir string, port int, p scanParams) error {
 
 	go func() {
 		defer isRunning.Store(false)
-		if err := server.Start(); err != nil && win.ctx.Err() == nil {
-			log.Printf("warpcore: socks server exited: %v", err)
+		err := server.Start()
+		if err != nil && rootCtx.Err() == nil {
+			// BUG HISTORY (v1.4.0, exposed by a stale port-holder in the
+			// sandbox): when the listener dies on its own (bind failure,
+			// EMFILE...) the old code closed the tunnel device under a LIVE
+			// context — MaintainTunnel treats the closed device as a transient
+			// loss and reconnects FOREVER ("Tunnel connection lost: failed to
+			// read from TUN device: file already closed. Reconnecting..."
+			// every second, hammering Cloudflare with handshakes). Unwind the
+			// engine exactly like Stop() would: cancel first (the Maintain loop
+			// exits via its ctx checks), release the slot, THEN close.
+			log.Printf("warpcore: socks server exited: %v — unwinding engine", err)
+			rootCancel()
+			mu.Lock()
+			if current == st {
+				current = nil
+			}
+			mu.Unlock()
 		}
 		_ = closeTunDraining(win.dev)
 	}()
@@ -774,6 +1135,16 @@ func startEngine(configDir string, port int, p scanParams) error {
 
 	ok = true
 	log.Printf("warpcore: engine ready (%s, endpoint=%s)", transportName(winH2), win.ep)
+
+	// v1.4.0 FLUX turbo: the user is online — now widen the road. In the
+	// background the engine validates up to extraMax MORE tunnels on the
+	// remaining endpoints of the winning transport and exposes each on its
+	// own SOCKS port (base+1..); sing-box's urltest group rotates traffic
+	// onto whichever path is currently fastest. Pure enrichment: nothing in
+	// the connect path waits on this, and a Stop() tears extras down via
+	// the usual ownership path.
+	go bootExtras(rootCtx, st, tlsConfig, localAddresses, dnsAddrs, winH2, ip, port)
+
 	return nil
 }
 
@@ -796,6 +1167,20 @@ func Stop() {
 	}
 	if st.srv != nil {
 		_ = st.srv.Stop() // shuts the listener + relays down, so boot returns
+	}
+	// v1.4.0 FLUX: the background tunnels die via st.cancel (rootCancel)
+	// above; their SOCKS listeners are NOT parented to that context, so
+	// each gets an explicit Stop here. Snapshot under mu: bootExtras only
+	// ever appends while the slot is still owned, so nothing new appears
+	// after this point.
+	mu.Lock()
+	extras := st.extras
+	st.extras = nil
+	mu.Unlock()
+	for _, ex := range extras {
+		if ex != nil && ex.srv != nil {
+			_ = ex.srv.Stop()
+		}
 	}
 	select {
 	case <-st.finished:
