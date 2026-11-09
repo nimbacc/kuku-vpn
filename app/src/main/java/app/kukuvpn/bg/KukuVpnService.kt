@@ -229,7 +229,18 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 // unreachable) — treat it like any other candidate error and
                 // fall through to the next candidate instead of killing the
                 // whole connection chain.
-                try {
+                if (WarpMasqueEngine.isRunning()) {
+                    // v1.2.6: the engine is already validated (app-open prewarm
+                    // or a previous candidate's boot) — USE it. The SOCKS
+                    // outbound is transport-agnostic, so the profile's h2/h3
+                    // label only decides how a COLD boot sweeps. Killing a warm
+                    // engine to re-boot in the profile's own mode burned a
+                    // working tunnel and re-paid the whole sweep.
+                    ServiceBridge.log(
+                        "INFO",
+                        "reusing warm WARP engine (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})"
+                    )
+                } else try {
                     ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
                     val bootStart = android.os.SystemClock.elapsedRealtime()
                     // v1.2.4: single-flight boot shared with the app-open
@@ -238,7 +249,8 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     // "already running" guard. v1.2.5: the engine RACES its
                     // endpoints in waves of 4 (≤~20s worst, ~2-5s typical) and
                     // onTick keeps the log alive so a slow cold boot never
-                    // looks frozen again.
+                    // looks frozen again. v1.2.6: any warm engine is reused,
+                    // whatever mode it runs.
                     WarpMasqueEngine.boot(
                         this,
                         useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
@@ -250,6 +262,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                             "${android.os.SystemClock.elapsedRealtime() - bootStart}ms)"
                     )
                 } catch (e: Exception) {
+                    // the service is being torn down (stop tap / destroy) — the
+                    // chain must not march on; also keeps cancellation noise out
+                    // of the candidate log (the "Job was cancelled" report)
+                    if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: MASQUE engine: ${e.message}")
                     continue
@@ -313,6 +329,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     )
                     return
                 } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) return // service teardown
                     lastError = e
                     ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
                     if (isMasque) WarpMasqueEngine.stop()

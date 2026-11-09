@@ -49,9 +49,19 @@ class ProfileStore(private val context: Context) {
             val existing = prefs[ProfileKeys.LIST]?.let {
                 runCatching { json.decodeFromString<List<Profile>>(it) }.getOrNull()
             } ?: emptyList()
-            // de-duplicate by (type, host, port, uuid/password) so re-importing a sub refreshes it
-            val keyOf = { p: Profile -> "${p.type}|${p.host}|${p.port}|${p.uuid}|${p.password}|${p.privateKey}" }
-            val merged = (existing.associateBy { keyOf(it) } + newOnes.associateBy { keyOf(it) }).values
+            // de-duplicate by (type, transport, host, port, uuid/password) so re-importing
+            // a sub refreshes it.
+            // BUG HISTORY (v1.2.6): transport was NOT part of this key, and the two
+            // auto MASQUE profiles (masque-h2 / masque-h3) share type+host+port
+            // (127.0.0.1:2085) and carry no keys — so every addAll() made them
+            // OVERWRITE each other. The store flip-flopped between the two on every
+            // app open, the fallback chain permanently ran with only ONE MASQUE
+            // transport, and on ISPs that filter UDP the chain held no working
+            // candidate at all (all WireGuard ports + H3 dead, H2/TCP-443 missing).
+            val keyOf = { p: Profile ->
+                "${p.type}|${p.transport}|${p.host}|${p.port}|${p.uuid}|${p.password}|${p.privateKey}"
+            }
+            val merged = (existing.associateBy(keyOf) + newOnes.associateBy(keyOf)).values
             prefs[ProfileKeys.LIST] = json.encodeToString(merged.toList())
             if (prefs[ProfileKeys.SELECTED] == null) prefs[ProfileKeys.SELECTED] = newOnes.first().id
         }

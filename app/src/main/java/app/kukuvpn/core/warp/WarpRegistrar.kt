@@ -103,6 +103,19 @@ object WarpRegistrar {
             }
 
             else -> {
+                // v1.2.6: heal a DANGLING selection. The addAll() dedup bug (see
+                // Stores.addAll) made masque-h2 and masque-h3 overwrite each other,
+                // so the stored selected/lastGood ids could point at a profile that
+                // no longer exists — the connect chain then ran with no leader at
+                // all. Point the selection at a live WARP profile first.
+                val selRaw = store.selectedId.first()
+                if (selRaw != null && existing.none { it.id == selRaw }) {
+                    val healed = existing.firstOrNull { it.transport == TRANSPORT_MASQUE_H2 }
+                        ?: existing.firstOrNull { it.transport == TRANSPORT_MASQUE }
+                        ?: existing.firstOrNull()
+                    healed?.let { store.select(it.id) }
+                }
+
                 val additions = mutableListOf<Profile>()
                 if (existing.none { it.transport == TRANSPORT_MASQUE_H2 }) {
                     additions += masqueProfile(context, TRANSPORT_MASQUE_H2)
@@ -117,18 +130,22 @@ object WarpRegistrar {
                 }
                 if (additions.isNotEmpty()) {
                     store.addAll(additions)
-                    // Steering rule for legacy installs: if nothing ever verified,
-                    // OR the last-good profile is a plain WireGuard WARP endpoint
-                    // (the exact path hostile ISPs filter), selection moves to
-                    // MASQUE H2 so the very next connect takes the survivable path.
-                    val lastGood = store.lastGoodId.first()?.let { id ->
+                    // Steering rule for legacy installs: if nothing ever verified
+                    // (including a DANGLING lastGood id left behind by the addAll
+                    // dedup bug — it resolves to no profile), OR the last-good
+                    // profile is a plain WireGuard WARP endpoint (the exact path
+                    // hostile ISPs filter), selection moves to MASQUE H2 so the
+                    // very next connect takes the survivable path.
+                    val lastGoodRaw = store.lastGoodId.first()
+                    val lastGood = lastGoodRaw?.let { id ->
                         store.snapshot().firstOrNull { it.id == id }
                     }
                     val lastGoodIsPlainWgWarp = lastGood != null &&
                         lastGood.fromSubscription == WARP_SOURCE &&
                         !lastGood.transport.startsWith(TRANSPORT_MASQUE)
-                    if (store.lastGoodId.first() == null || lastGoodIsPlainWgWarp) {
-                        additions.firstOrNull { it.transport == TRANSPORT_MASQUE_H2 }?.let { store.select(it.id) }
+                    if (lastGood == null || lastGoodIsPlainWgWarp) {
+                        additions.firstOrNull { it.transport == TRANSPORT_MASQUE_H2 }
+                            ?.let { store.select(it.id) }
                     }
                 }
                 _status.value = WarpSetup.READY

@@ -64,14 +64,24 @@ object WarpMasqueEngine {
     }
 
     /**
-     * Single-flight engine boot (v1.2.4).
+     * Single-flight engine boot.
      *
-     * BUG: the app-open prewarm and the connect flow both booted the engine;
-     * the Go side rejects a second Start() while one is in flight ("engine is
-     * already running"), so a tap during the prewarm sweep burned MASQUE
-     * candidates on that error. Now every caller goes through here: the
-     * second caller awaits the first, then REUSES the running engine when the
-     * mode matches; an H2↔H3 mismatch stops and boots the requested mode.
+     * BUG (v1.2.4): the app-open prewarm and the connect flow both booted the
+     * engine; the Go side rejects a second Start() while one is in flight
+     * ("engine is already running"), so a tap during the prewarm sweep burned
+     * MASQUE candidates on that error. Now every caller goes through here: the
+     * second caller awaits the first, then reuses the running engine.
+     *
+     * BUG (v1.2.6): the reuse was MODE-GATED — a boot for the other transport
+     * STOPPED the warm engine and re-swept. The prewarm validates H2 (TCP 443,
+     * the survivable path) while the selected profile was often the H3 one, so
+     * the connect flow killed a freshly validated tunnel and re-paid a full
+     * sweep in the mode the ISP was more likely to block. The SOCKS outbound is
+     * transport-agnostic — 127.0.0.1:[SOCKS_PORT] speaks the same protocol
+     * whichever wire format the engine uses inside — so ANY warm engine is
+     * reused and the mode only decides how a COLD boot sweeps. A failed
+     * verification still stops the engine, so a dead tunnel is never carried
+     * over to the next candidate.
      *
      * The engine's endpoint sweep is hard-bounded on the Go side and RACED
      * in waves of 4 (v1.2.5): ≤~20s worst case, ~2-5s typical, hard cap 45s.
@@ -83,13 +93,13 @@ object WarpMasqueEngine {
         useHttp2: Boolean,
         onTick: ((Long) -> Unit)? = null,
     ): Result<Unit> = bootMutex.withLock {
-        if (isRunning() && runningUseHttp2 == useHttp2) {
-            return@withLock Result.success(Unit) // warm engine, right mode
+        if (isRunning()) {
+            return@withLock Result.success(Unit) // warm engine — any mode wins
         }
         runCatching {
             withContext(Dispatchers.IO) {
                 ensureRegistered(context)
-                stop() // wrong mode or stale instance — deterministic teardown
+                stop() // stale instance — deterministic teardown, then a cold boot
                 val t0 = SystemClock.elapsedRealtime()
                 val watchdog = onTick?.let { tick ->
                     engineScope.launch {
@@ -113,7 +123,7 @@ object WarpMasqueEngine {
      * (MASQUE H2 over TCP 443 — the most survivable path) in the background
      * so the FIRST tap finds a warm, already-validated tunnel instead of
      * paying the cold endpoint sweep. Safe to call unconditionally: boot()
-     * is single-flight and a no-op when the engine already runs in that mode.
+     * is single-flight and reuses the engine whatever mode it runs (v1.2.6).
      */
     fun prewarm(context: Context) {
         engineScope.launch {
