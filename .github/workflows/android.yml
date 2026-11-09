@@ -113,19 +113,24 @@ jobs:
       # failure history: the module graph forces a modern Go (go.mod >= 1.26),
       # and wlynxg/anet (quic-go's Android shim) then dies at link time on its
       # go:linkname of net.zoneCache — anet's own README prescribes the fix:
-      # build with -checklinkname=0. 32-bit android/arm is NOT built: Go
-      # requires external cgo linking there (run #21); on such devices the
-      # psiphon candidates fail fast and the smart WARP chain takes over.
-      - name: build psiphon core (console client, arm64)
+      # build with -checklinkname=0.
+      # v1.6.0: ALL device ABIs (the v1.5.0 arm64-only build is why 32-bit
+      # devices never got a real Psiphon). android/arm (32-bit) REQUIRES
+      # external (cgo) linking — proven locally on go 1.24.5 — so the v7a
+      # slice compiles with the NDK's armv7a clang as the external linker.
+      - name: build psiphon core (console client, all ABIs)
         run: |
           set -e
           git -c core.longpaths=true clone --quiet --depth 50 --branch shirokhorshid \
             https://github.com/CluvexStudio/psiphon-tunnel-core.git /tmp/psiphon
           git -C /tmp/psiphon checkout --quiet 83aa73b9b982e7421e00117f5b0c5aceb5dda452
           out=/tmp/psiphon-out
-          mkdir -p "$out/arm64-v8a"
+          mkdir -p "$out/arm64-v8a" "$out/armeabi-v7a" "$out/x86_64"
+          ndkbin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           cd /tmp/psiphon/ConsoleClient
-          GOOS=android GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/arm64-v8a/libpsiphon.so" .
+          GOOS=android GOARCH=arm64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/arm64-v8a/libpsiphon.so" .
+          GOOS=android GOARCH=amd64   CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/x86_64/libpsiphon.so" .
+          GOOS=android GOARCH=arm     CGO_ENABLED=1 CC="$ndkbin/armv7a-linux-androideabi24-clang" go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/armeabi-v7a/libpsiphon.so" .
           ls -lh "$out"/*/
 
       - name: upload psiphon artifact
@@ -133,6 +138,82 @@ jobs:
         with:
           name: psiphon
           path: /tmp/psiphon-out
+
+      # v1.6.0 Tor backend: FOUR per-ABI executables per device slice —
+      #  - libtor.so       : tor 0.4.8.16 from the Tor Project's kmp-tor
+      #                      packaging (resource-compilation-lib-tor-android).
+      #                      It is a shared library exporting the libtor C API
+      #                      (tor_main); our third_party/torshim/torrun.c PIE
+      #                      executable dlopens it and calls tor_main — so tor
+      #                      runs as a child process exactly like libpsiphon.so
+      #                      (piped stdout, destroy/destroyForcibly teardown).
+      #  - libtorrun.so    : the shim compiled here with the NDK clang.
+      #  - liblyrebird.so  : obfs4 (+ meek_lite) pluggable transport.
+      #  - libwebtunnel.so : webtunnel pluggable transport.
+      # PT sources come from the OFFICIAL Go module proxy
+      # (proxy.golang.org serves gitlab.torproject.org modules) at PINNED
+      # versions — no git clone of gitlab.torproject.org needed. The PT
+      # builds are the same checklinkname=0 recipe as psiphon (quic-go in
+      # the graph), and 32-bit arm goes through the NDK external linker.
+      - name: build tor shim (libtorrun, all ABIs)
+        run: |
+          set -e
+          out=/tmp/tor-out
+          mkdir -p "$out/arm64-v8a" "$out/armeabi-v7a" "$out/x86_64"
+          ndkbin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cc_arm64="$ndkbin/aarch64-linux-android24-clang"
+          cc_arm="$ndkbin/armv7a-linux-androideabi24-clang"
+          cc_x64="$ndkbin/x86_64-linux-android24-clang"
+          "$cc_arm64" -O2 -s third_party/torshim/torrun.c -o "$out/arm64-v8a/libtorrun.so" -ldl
+          "$cc_arm"   -O2 -s third_party/torshim/torrun.c -o "$out/armeabi-v7a/libtorrun.so" -ldl
+          "$cc_x64"   -O2 -s third_party/torshim/torrun.c -o "$out/x86_64/libtorrun.so" -ldl
+          file "$out"/*/libtorrun.so
+
+      - name: fetch tor binary (kmp-tor packaging, all ABIs)
+        run: |
+          set -e
+          out=/tmp/tor-out
+          kv=408.16.4
+          aar=$(mktemp -d)/tor.aar
+          curl -sfL --retry 3 -o "$aar" \
+            "https://repo1.maven.org/maven2/io/matthewnelson/kmp-tor/resource-compilation-lib-tor-android/$kv/resource-compilation-lib-tor-android-$kv.aar"
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            unzip -o -q -j "$aar" "jni/$abi/libtor.so" -d "$out/$abi/"
+          done
+          file "$out"/*/libtor.so
+
+      - name: build pluggable transports (lyrebird obfs4 + webtunnel, all ABIs)
+        run: |
+          set -e
+          out=/tmp/tor-out
+          ndkbin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CGO_ENABLED=0
+          L=gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/cmd/lyrebird
+          W=gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/main/client
+          work=$(mktemp -d)
+          cd "$work"
+          go mod init kuku-pt >/dev/null
+          # pinned versions (lyrebird is pseudo-versioned — no semver tags upstream)
+          go get gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/cmd/lyrebird@v0.0.0-20261104192811-59ac7e400c38
+          go get gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/main/client@v0.0.7
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            case "$abi" in
+              arm64-v8a)   garch=arm64; cgo=0; cc="" ;;
+              x86_64)      garch=amd64; cgo=0; cc="" ;;
+              armeabi-v7a) garch=arm;   cgo=1; cc="$ndkbin/armv7a-linux-androideabi24-clang" ;;
+            esac
+            GOOS=android GOARCH=$garch CGO_ENABLED=$cgo CC="$cc" \
+              go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/$abi/liblyrebird.so" "$L"
+            GOOS=android GOARCH=$garch CGO_ENABLED=$cgo CC="$cc" \
+              go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/$abi/libwebtunnel.so" "$W"
+          done
+          ls -lh "$out"/*/
+
+      - name: upload tor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tor
+          path: /tmp/tor-out
 
   build:
     name: build APK
@@ -168,6 +249,28 @@ jobs:
         with:
           name: psiphon
           path: app/src/main/jniLibs
+
+      - name: download tor binaries (libtor/libtorrun/lyrebird/webtunnel → jniLibs)
+        uses: actions/download-artifact@v4
+        with:
+          name: tor
+          path: app/src/main/jniLibs
+
+      # v1.6.0: refresh the Tor "auto" bridge lists from the scriptzteam
+      # collector at build time — every APK carries bridges fresh enough to
+      # survive a censor sweep. On ANY fetch failure the committed snapshot
+      # in app/src/main/assets ships instead (never an empty list).
+      - name: refresh tor bridge snapshot (best-effort)
+        run: |
+          ok=0
+          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-obfs4.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-obfs4 && ok=1
+          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-webtunnel.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-webtunnel && ok=$((ok+1))
+          if [ "$ok" = "2" ]; then
+            python3 scripts/bridge_sample.py /tmp/bridges-obfs4.txt /tmp/bridges-webtunnel.txt app/src/main/assets
+          else
+            echo "::warning::bridge collector unreachable — shipping the committed snapshot"
+          fi
+          wc -l app/src/main/assets/tor_bridges_obfs4.txt app/src/main/assets/tor_bridges_webtunnel.txt
 
       - name: security guard — no signing material in git (RIX-style hygiene)
         run: |
@@ -206,11 +309,21 @@ jobs:
         run: |
           VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts | head -1)
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk "dist/Kuku-${VER}.apk" 2>/dev/null || true
-          cp app/build/outputs/apk/release/app-release-unsigned.apk "dist/Kuku-${VER}-unsigned.apk" 2>/dev/null || true
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/Kuku-${VER}-debug.apk"
+          # v1.6.0 ABI splits: app-<abi>-<kind>.apk + app-universal-<kind>.apk
+          for kind in release debug; do
+            for f in app/build/outputs/apk/$kind/*.apk; do
+              base=$(basename "$f") # e.g. app-arm64-v8a-release.apk
+              tag="${base#app-}"; tag="${tag%-$kind.apk}" # arm64-v8a | universal
+              if [ "$kind" = "release" ]; then
+                cp "$f" "dist/Kuku-${VER}-${tag}.apk"
+              else
+                cp "$f" "dist/Kuku-${VER}-${tag}-debug.apk"
+              fi
+            done
+          done
           cd dist && sha256sum *.apk > SHA256SUMS.txt && cd ..
           cat dist/SHA256SUMS.txt
+          ls -lh dist/
 
       - name: build provenance attestation (forks of this repo fail this check by design)
         if: github.event_name == 'push'

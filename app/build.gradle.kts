@@ -13,8 +13,8 @@ android {
         applicationId = "app.kukuvpn"
         minSdk = 24
         targetSdk = 35
-        versionCode = 17
-        versionName = "1.5.0"
+        versionCode = 18
+        versionName = "1.6.0"
         resourceConfigurations += listOf("en", "fa")
     }
 
@@ -62,6 +62,19 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // v1.6.0: the bundled engines (libpsiphon/libtor/libtorrun/liblyrebird/
+    // libwebtunnel) are per-ABI and heavy — a single universal APK would be
+    // enormous. Ship per-ABI splits PLUS a universal APK; the CI collect step
+    // renames them to Kuku-<ver>-<abi>.apk / Kuku-<ver>-universal.apk.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86_64")
+            isUniversalApk = true
+        }
     }
 
     compileOptions {

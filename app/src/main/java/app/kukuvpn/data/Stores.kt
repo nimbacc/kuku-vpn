@@ -168,6 +168,15 @@ data class AppSettings(
     // v1.3.0 Scan mode: "turbo" | "balanced" | "thorough" | "stealth" | "ironclad"
     // (stealth = no UDP at all — only MASQUE over plain TCP 443)
     val scanMode: String = "balanced",
+    // v1.6.0 Psiphon exit country (ISO 3166-1 alpha-2) — "auto" = let the
+    // core pick the best server anywhere (the core's own default)
+    val psiphonRegion: String = "auto",
+    // v1.6.0 Tor bridges: "auto" (bundled fresh obfs4+webtunnel snapshots),
+    // "custom" (torCustomBridges), "none" (bridge-less, only for clean
+    // networks where guards are reachable directly)
+    val torBridgeMode: String = "auto",
+    // user-pasted bridge lines for torBridgeMode == "custom"
+    val torCustomBridges: String = "",
 )
 
 private object SettingsKeys {
@@ -181,6 +190,9 @@ private object SettingsKeys {
     val VPN_MODE = stringPreferencesKey("vpn_mode")
     val PROTOCOL = stringPreferencesKey("protocol")
     val SCAN_MODE = stringPreferencesKey("scan_mode")
+    val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
+    val TOR_BRIDGE_MODE = stringPreferencesKey("tor_bridge_mode")
+    val TOR_CUSTOM_BRIDGES = stringPreferencesKey("tor_custom_bridges")
 }
 
 class SettingsStore(private val context: Context) {
@@ -197,6 +209,9 @@ class SettingsStore(private val context: Context) {
             vpnMode = p[SettingsKeys.VPN_MODE]?.toBooleanStrictOrNull() ?: true,
             protocol = p[SettingsKeys.PROTOCOL] ?: "smart",
             scanMode = p[SettingsKeys.SCAN_MODE] ?: "balanced",
+            psiphonRegion = p[SettingsKeys.PSIPHON_REGION] ?: "auto",
+            torBridgeMode = p[SettingsKeys.TOR_BRIDGE_MODE] ?: "auto",
+            torCustomBridges = p[SettingsKeys.TOR_CUSTOM_BRIDGES] ?: "",
         )
     }
 
@@ -212,4 +227,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setVpnMode(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.VPN_MODE] = v.toString() }
     suspend fun setProtocol(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PROTOCOL] = v }
     suspend fun setScanMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.SCAN_MODE] = v }
+    suspend fun setPsiphonRegion(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PSIPHON_REGION] = v }
+    suspend fun setTorBridgeMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_BRIDGE_MODE] = v }
+    suspend fun setTorCustomBridges(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_CUSTOM_BRIDGES] = v }
 }

@@ -68,6 +68,43 @@
     <string name="psiphon_profile_name">سایفون (رایگان)</string>
     <string name="psiphon_chain_profile_name">کوکو → سایفون</string>
 
+    <!-- Tor backends (v1.6.0) -->
+    <string name="conn_tor">تور (Tor)</string>
+    <string name="conn_tor_desc">شبکهٔ واقعی تور (tor 0.4.8 همراه برنامه) — با پل‌های obfs4 و webtunnel که فهرست تازهٔ آن‌ها در هر بیلد داخل برنامه قرار می‌گیرد. کندترین گزینه، مقاوم‌ترین در برابر فیلترینگ.</string>
+    <string name="conn_kuku_tor">کوکو → تور</string>
+    <string name="conn_kuku_tor_desc">تور از دل تونل WARP — برای شبکه‌هایی که خودِ تور در دسترس نیست ولی WARP بیرون می‌زند. بدون پل اجرا می‌شود (WARP نقش پل را بازی می‌کند).</string>
+    <string name="tor_profile_name">تور (رایگان)</string>
+    <string name="tor_chain_profile_name">کوکو → تور</string>
+
+    <!-- Psiphon exit country (v1.6.0) -->
+    <string name="conn_psiphon_region">کشور خروجی سایفون</string>
+    <string name="conn_psiphon_region_desc">سرور سایفون از کدام کشور بیرون بزند. «خودکار» سریع‌ترین سرور را از هر کشوری برمی‌دارد؛ انتخاب کشور ثابت کندتر است ولی خروجی همیشه همان‌جاست.</string>
+    <string name="region_auto">خودکار (سریع‌ترین از هر جا)</string>
+    <string name="region_us">ایالات متحده (US)</string>
+    <string name="region_gb">انگلستان (GB)</string>
+    <string name="region_de">آلمان (DE)</string>
+    <string name="region_nl">هلند (NL)</string>
+    <string name="region_ca">کانادا (CA)</string>
+    <string name="region_sg">سنگاپور (SG)</string>
+    <string name="region_jp">ژاپن (JP)</string>
+
+    <!-- Tor bridges (v1.6.0) -->
+    <string name="conn_tor_bridges">پل‌های تور</string>
+    <string name="conn_tor_bridges_desc">پل‌ها تور را از دید فیلتر پنهان می‌کنند. فهرست خودکار در هر بیلد برنامه تازه‌سازی می‌شود.</string>
+    <string name="bridge_auto">خودکار (obfs4 و webtunnel تازه)</string>
+    <string name="bridge_auto_desc">فهرست تازهٔ پل‌ها در زمان ساخت برنامه داخل آن قرار می‌گیرد — هیچ تنظیمی لازم نیست.</string>
+    <string name="bridge_custom">پل‌های خودم</string>
+    <string name="bridge_custom_desc">خط‌های Bridge خودت را پیست کن (obfs4/webtunnel از bridges.torproject.org یا یک فرستندهٔ مورد اعتماد).</string>
+    <string name="bridge_none">بدون پل (مستقیم)</string>
+    <string name="bridge_none_desc">تور خالص بدون پل — فقط برای شبکه‌هایی که اصلاً تور را فیلتر نمی‌کنند.</string>
+    <string name="tor_bridges_hint">obfs4 1.2.3.4:443 CERT… cert=… iat-mode=0\nwebtunnel [2001:db8…]:443 FP… url=https://… ver=0.0.4</string>
+    <string name="tor_bridges_save">ذخیرهٔ پل‌ها</string>
+
+    <!-- Honesty banner (v1.6.0) -->
+    <string name="method_psiphon">سایفون</string>
+    <string name="method_tor">تور</string>
+    <string name="fallback_notice">وصل شد — ولی از مسیر جایگزین WARP: اول %1$s شکست خورد (%2$s). یک بار قطع و وصل کن، یا صفحهٔ «گزارش» را ببین.</string>
+
     <!-- Profiles -->
     <string name="tab_profiles">پروفایل‌ها</string>
     <string name="tab_home">خانه</string>
@@ -84,6 +121,8 @@
     <string name="profiles_import_failed">ورود ناموفق: %1$s</string>
     <string name="profiles_selected">انتخاب‌شده</string>
     <string name="profiles_last_good">آخرین موفق</string>
+    <string name="profiles_delete">حذف</string>
+    <string name="profiles_empty">هنوز پروفایلی نیست</string>
 
     <!-- Settings -->
     <string name="settings_title">تنظیمات</string>
@@ -133,6 +172,7 @@
     <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
     <string name="about_changes">تغییرات اخیر</string>
     <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_160">1.6.0 — سایفون واقعی (همهٔ معماری‌ها + انتخاب کشور خروجی) و تور واقعی (پل‌های تازهٔ obfs4/webtunnel + پیست پل خودت) — و پایان جایگزینی بی‌صدا: نجات با WARP صادقانه اعلام می‌شود</string>
     <string name="about_change_150">1.5.0 — سایفون و کوکو → سایفون: دو روش جدید بدون سرور</string>
     <string name="about_change_140">1.4.0 — توربو FLUX: چرخش زندهٔ چندمسیره، همیشه روی سریع‌ترین لبه</string>
     <string name="about_change_130">1.3.0 — صفحهٔ اتصال: انتخاب روش، حالت جست‌وجو و WARP×2 (گول)</string>

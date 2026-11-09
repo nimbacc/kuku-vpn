@@ -25,6 +25,7 @@ import app.kukuvpn.KukuApp
 import app.kukuvpn.R
 import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.core.fallback.FallbackEngine
+import app.kukuvpn.core.tor.TorEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
 import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.core.psiphon.PsiphonEngine
@@ -209,10 +210,29 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 ServiceBridge.log("WARN", "psiphon profiles: ${e.message} — falling back to Smart")
             }
         }
+        // v1.6.0 Tor backends: lazily register the bundled-Tor candidates
+        // (standalone + Kuku→Tor) — same lazy pattern
+        if (protocol == FallbackEngine.PROTOCOL_TOR || protocol == FallbackEngine.PROTOCOL_KUKU_TOR) {
+            try {
+                TorEngine.ensureProfiles(this)
+            } catch (e: Exception) {
+                ServiceBridge.log("WARN", "tor profiles: ${e.message} — falling back to Smart")
+            }
+        }
         startNotif(getString(R.string.notif_connecting), ongoing = true)
 
         ServiceBridge.resetSession()
         ServiceBridge.state.value = TunnelState.PREPARING
+
+        // v1.6.0 honesty: remember which family the user PINNED, so when the
+        // pinned method fails and a WARP candidate ends up carrying traffic,
+        // the UI says so out loud instead of showing a plain "Connected".
+        val pinnedFamily = when (protocol) {
+            FallbackEngine.PROTOCOL_PSIPHON, FallbackEngine.PROTOCOL_KUKU_PSIPHON -> PsiphonEngine.SOURCE
+            FallbackEngine.PROTOCOL_TOR, FallbackEngine.PROTOCOL_KUKU_TOR -> TorEngine.SOURCE
+            else -> null
+        }
+        var pinnedFailure: String? = null
 
         var chain = buildChain(protocol)
         // stealth scan mode: no raw-UDP wire format at all — drop the plain
@@ -338,16 +358,69 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     PsiphonEngine.boot(
                         this,
                         upstream = chained,
+                        region = settings.psiphonRegion,
                         onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s") },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
-                        "psiphon core ready (socks 127.0.0.1:${PsiphonEngine.SOCKS_PORT}${if (chained) ", underlay WARP" else ""})"
+                        "psiphon core ready (socks 127.0.0.1:${PsiphonEngine.SOCKS_PORT}${
+                            if (chained) ", underlay WARP" else ""
+                        }${
+                            settings.psiphonRegion.takeIf { it.isNotBlank() && it != "auto" }
+                                ?.let { ", egress $it" } ?: ""
+                        })"
                     )
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
+                    pinnedFailure = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: psiphon core: ${e.message}")
+                    if (chained) WarpMasqueEngine.stop()
+                    continue
+                }
+            }
+            // v1.6.0 Tor candidates boot the bundled tor core (child process
+            // via the libtorrun shim, SOCKS on 127.0.0.1:1089). The chained
+            // variant rides the WARP engine's underlay (torrc Socks5Proxy),
+            // so the engine must be up first.
+            val isTor = candidate.fromSubscription == TorEngine.SOURCE
+            if (isTor) {
+                val chained = candidate.transport == TorEngine.TRANSPORT_CHAINED
+                if (chained && !WarpMasqueEngine.isRunning()) try {
+                    ServiceBridge.log("INFO", "booting WARP underlay for Kuku→Tor (scan: ${settings.scanMode})")
+                    WarpMasqueEngine.boot(
+                        this,
+                        scanMode = settings.scanMode,
+                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+                    ).getOrThrow()
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) return
+                    lastCandidateError = e.message
+                    ServiceBridge.log("ERROR", "${candidate.name}: WARP underlay: ${e.message}")
+                    continue
+                }
+                if (!chained && WarpMasqueEngine.isRunning()) {
+                    // standalone Tor owns the exit — a warm WARP engine would
+                    // sit unused on the device's network
+                    WarpMasqueEngine.stop()
+                }
+                try {
+                    TorEngine.boot(
+                        this,
+                        upstream = chained,
+                        bridgeMode = settings.torBridgeMode,
+                        customBridges = settings.torCustomBridges,
+                        onTick = { ms -> ServiceBridge.log("INFO", "tor booting… ${ms / 1000}s (bootstrap ${TorEngine.lastProgressLabel()})") },
+                    ).getOrThrow()
+                    ServiceBridge.log(
+                        "INFO",
+                        "tor core ready (socks 127.0.0.1:${TorEngine.SOCKS_PORT}${if (chained) ", underlay WARP" else ""})"
+                    )
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) return
+                    lastCandidateError = e.message
+                    pinnedFailure = e.message
+                    ServiceBridge.log("ERROR", "${candidate.name}: tor core: ${e.message}")
                     if (chained) WarpMasqueEngine.stop()
                     continue
                 }
@@ -394,6 +467,22 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     ServiceBridge.lit(TunnelStage.TUNNEL)
                     ServiceBridge.lit(TunnelStage.EXIT)
                     ServiceBridge.exitIp.value = verdict.exitIp
+                    // v1.6.0 honesty: if the user pinned Psiphon/Tor but the
+                    // pinned candidates all failed and a WARP candidate is
+                    // carrying the traffic, SAY SO — never a plain "Connected".
+                    if (pinnedFamily != null && candidate.fromSubscription != pinnedFamily) {
+                        ServiceBridge.fallbackNote.value =
+                            getString(
+                                R.string.fallback_notice,
+                                getString(if (pinnedFamily == PsiphonEngine.SOURCE) R.string.method_psiphon else R.string.method_tor),
+                                pinnedFailure ?: "unknown",
+                            )
+                        ServiceBridge.log(
+                            "WARN",
+                            "honesty: pinned method failed (${pinnedFailure ?: "?"}) — " +
+                                "this connection rides the WARP fallback chain"
+                        )
+                    }
                     ServiceBridge.state.value = TunnelState.ACTIVE
                     profileStore.select(candidate.id)
                     profileStore.setLastGood(candidate.id)
@@ -418,11 +507,20 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return // service teardown
                     lastError = e
+                    // v1.6.0: a pinned-family candidate that dies at core-start
+                    // or verify is the reason the fallback banner will show
+                    if (pinnedFamily != null && candidate.fromSubscription == pinnedFamily) {
+                        pinnedFailure = e.message
+                    }
                     ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
                     if (isMasque) WarpMasqueEngine.stop()
                     if (isPsiphon) {
                         PsiphonEngine.stop()
                         if (candidate.transport == PsiphonEngine.TRANSPORT_CHAINED) WarpMasqueEngine.stop()
+                    }
+                    if (isTor) {
+                        TorEngine.stop()
+                        if (candidate.transport == TorEngine.TRANSPORT_CHAINED) WarpMasqueEngine.stop()
                     }
                     stopCore()
                 }
@@ -600,6 +698,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         stopCore()
         WarpMasqueEngine.stop()
         PsiphonEngine.stop()
+        TorEngine.stop()
         commandServer?.let { server ->
             runCatching { server.close() }
             runCatching { Seq.destroyRef(server.refnum) }

@@ -21,10 +21,13 @@ import kotlinx.coroutines.flow.first
  *   gool   — the WARP×2 inner-tunnel profile first, then the smart chain
  *   psiphon / kuku-psiphon — the bundled Psiphon core first (v1.5.0),
  *                            then the smart chain
+ *   tor / kuku-tor — the bundled Tor core first (v1.6.0), then the smart chain
  *
  * A pinned method that cannot connect must NEVER leave the app offline, so
  * every pin keeps the smart chain behind it — the pin decides what is tried
- * FIRST, not what is the only option.
+ * FIRST, not what is the only option. v1.6.0: when a psiphon/tor pin falls
+ * through to the WARP chain, the service surfaces an explicit warning banner
+ * (the "connected but it's secretly WARP" lie is gone).
  *
  * Per-network memory (the Aether "remembers which one worked on this
  * network" rule): when the store holds a profile that last VERIFIED on the
@@ -97,6 +100,8 @@ class FallbackEngine(private val store: ProfileStore) {
             PROTOCOL_GOOL -> goolProfiles
             PROTOCOL_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_TRANSPORT }
             PROTOCOL_KUKU_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
+            PROTOCOL_TOR -> all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_TRANSPORT }
+            PROTOCOL_KUKU_TOR -> all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_CHAIN_TRANSPORT }
             else -> emptyList()
         }
 
@@ -138,11 +143,18 @@ class FallbackEngine(private val store: ProfileStore) {
         const val PROTOCOL_GOOL = "gool"
         const val PROTOCOL_PSIPHON = "psiphon"
         const val PROTOCOL_KUKU_PSIPHON = "kuku-psiphon"
+        const val PROTOCOL_TOR = "tor"
+        const val PROTOCOL_KUKU_TOR = "kuku-tor"
 
         // Psiphon backend markers (v1.5.0) — literals mirror PsiphonEngine
         private const val PSIPHON_SOURCE = "psiphon"
         private const val PSIPHON_TRANSPORT = "psiphon"
         private const val PSIPHON_CHAIN_TRANSPORT = "kuku-psiphon"
+
+        // Tor backend markers (v1.6.0) — literals mirror TorEngine
+        private const val TOR_SOURCE = "tor"
+        private const val TOR_TRANSPORT = "tor"
+        private const val TOR_CHAIN_TRANSPORT = "kuku-tor"
 
         // network classes (per-network memory)
         const val NETWORK_WIFI = "wifi"

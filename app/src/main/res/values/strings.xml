@@ -70,6 +70,43 @@
     <string name="psiphon_profile_name">Psiphon (Free)</string>
     <string name="psiphon_chain_profile_name">Kuku → Psiphon</string>
 
+    <!-- Tor backends (v1.6.0) -->
+    <string name="conn_tor">Tor</string>
+    <string name="conn_tor_desc">The real Tor network (bundled tor 0.4.8) — obfs4 and webtunnel bridges with a fresh list baked in on every build. Slowest option, strongest censorship resistance.</string>
+    <string name="conn_kuku_tor">Kuku → Tor</string>
+    <string name="conn_kuku_tor_desc">Tor reached through your WARP tunnel — for networks where tor itself is unreachable but WARP gets out. Runs without bridges (WARP plays the bridge).</string>
+    <string name="tor_profile_name">Tor (Free)</string>
+    <string name="tor_chain_profile_name">Kuku → Tor</string>
+
+    <!-- Psiphon exit country (v1.6.0) -->
+    <string name="conn_psiphon_region">Psiphon exit country</string>
+    <string name="conn_psiphon_region_desc">Which country the Psiphon exit should be in. Auto lets the network pick the fastest server; a fixed country is slower to find but always egresses there.</string>
+    <string name="region_auto">Auto (fastest anywhere)</string>
+    <string name="region_us">United States (US)</string>
+    <string name="region_gb">United Kingdom (GB)</string>
+    <string name="region_de">Germany (DE)</string>
+    <string name="region_nl">Netherlands (NL)</string>
+    <string name="region_ca">Canada (CA)</string>
+    <string name="region_sg">Singapore (SG)</string>
+    <string name="region_jp">Japan (JP)</string>
+
+    <!-- Tor bridges (v1.6.0) -->
+    <string name="conn_tor_bridges">Tor bridges</string>
+    <string name="conn_tor_bridges_desc">Bridges hide tor from the censor. The auto list is refreshed on every app build.</string>
+    <string name="bridge_auto">Auto (fresh obfs4 + webtunnel)</string>
+    <string name="bridge_auto_desc">A fresh bridge list is baked into the app at build time — no setup needed.</string>
+    <string name="bridge_custom">My own bridges</string>
+    <string name="bridge_custom_desc">Paste your own Bridge lines (obfs4/webtunnel from bridges.torproject.org or a trusted sender).</string>
+    <string name="bridge_none">No bridges (direct)</string>
+    <string name="bridge_none_desc">Plain tor without bridges — only for networks where tor is not filtered at all.</string>
+    <string name="tor_bridges_hint">obfs4 1.2.3.4:443 CERT… cert=… iat-mode=0\nwebtunnel [2001:db8…]:443 FP… url=https://… ver=0.0.4</string>
+    <string name="tor_bridges_save">Save bridges</string>
+
+    <!-- Honesty banner (v1.6.0) -->
+    <string name="method_psiphon">Psiphon</string>
+    <string name="method_tor">Tor</string>
+    <string name="fallback_notice">Connected — but through the WARP fallback: %1$s failed first (%2$s). Disconnect and retry, or check the Logs page for details.</string>
+
     <!-- Profiles -->
     <string name="tab_profiles">Profiles</string>
     <string name="tab_home">Home</string>
@@ -137,6 +174,7 @@
     <string name="about_github_hint">Source code, issues and new releases</string>
     <string name="about_changes">Recent changes</string>
     <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
+    <string name="about_change_160">1.6.0 — Real Psiphon (all architectures, exit country picker) and real Tor (fresh obfs4/webtunnel bridges, own-bridge paste) — and the end of silent fallback: a WARP rescue is announced honestly</string>
     <string name="about_change_150">1.5.0 — Psiphon and Kuku → Psiphon: two new serverless methods</string>
     <string name="about_change_140">1.4.0 — FLUX turbo: live multi-path rotation, always on the fastest edge</string>
     <string name="about_change_130">1.3.0 — Connection page: method selector, scan modes and WARP×2 (gool)</string>

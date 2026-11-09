@@ -17,6 +17,7 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -58,7 +59,10 @@ object PsiphonEngine {
     const val TRANSPORT_CHAINED = "kuku-psiphon"
 
     private const val BINARY = "libpsiphon.so"
-    private const val BOOT_CAP_MS = 90_000L
+    // v1.6.0: raised from 90s — Psiphon's link-selection on a filtered Iranian
+    // network legitimately takes 2–3 minutes; the old cap declared honest
+    // attempts dead and the chain silently fell to WARP (the "it's fake" bug).
+    private const val BOOT_CAP_MS = 240_000L
     private const val TICK_MS = 5_000L
 
     // public Psiphon bootstrap values (server-list distribution)
@@ -82,29 +86,43 @@ object PsiphonEngine {
     @Volatile private var proc: Process? = null
     @Volatile private var procUpstream: Boolean = false
     @Volatile private var tunnelUp: Boolean = false
+    @Volatile private var lastExitRegion: String = ""
     private val mutex = Mutex()
 
     val isRunning: Boolean get() = proc != null
 
+    /** The exit region the core last reported via ConnectedServerRegion. */
+    val exitRegion: String get() = lastExitRegion
+
     /**
      * Starts (or reuses) the Psiphon core and returns once its tunnel is
-     * established ("Tunnels" count >= 1). A [Result] instead of a throw so a
-     * failed boot is just a failed candidate, never a dead chain.
+     * established ("Tunnels" count >= 1). [region] is the requested egress
+     * country (ISO 3166-1 alpha-2, e.g. "US", "GB"; "" = best/any — the
+     * core's own default). A [Result] instead of a throw so a failed boot is
+     * just a failed candidate, never a dead chain.
      */
-    suspend fun boot(context: Context, upstream: Boolean, onTick: (Long) -> Unit): Result<Unit> =
-        mutex.withLock {
-            if (proc != null) {
-                if (procUpstream == upstream) return@withLock Result.success(Unit) // warm reuse
-                stopInternal() // different wiring — cold restart
-            }
-            val bin = File(context.applicationInfo.nativeLibraryDir, BINARY)
-            if (!bin.exists()) {
-                return@withLock Result.failure(IllegalStateException("$BINARY missing from APK"))
-            }
+    suspend fun boot(
+        context: Context,
+        upstream: Boolean,
+        region: String,
+        onTick: (Long) -> Unit,
+    ): Result<Unit> = mutex.withLock {
+        if (proc != null) {
+            if (procUpstream == upstream) return@withLock Result.success(Unit) // warm reuse
+            stopInternal() // different wiring — cold restart
+        }
+        val bin = File(context.applicationInfo.nativeLibraryDir, BINARY)
+        if (!bin.exists()) {
+            return@withLock Result.failure(
+                IllegalStateException(
+                    "$BINARY missing for this device ABI (${android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "?"})"
+                )
+            )
+        }
             val dir = File(context.filesDir, "psiphon").apply { mkdirs() }
             val dataDir = File(dir, "data").apply { mkdirs() }
             val cfg = File(dir, "config.json")
-            cfg.writeText(buildConfig(upstream, dataDir.absolutePath))
+            cfg.writeText(buildConfig(upstream, dataDir.absolutePath, region))
 
             val started = try {
                 ProcessBuilder(bin.absolutePath, "-config", cfg.absolutePath)
@@ -113,9 +131,10 @@ object PsiphonEngine {
             } catch (e: Exception) {
                 return@withLock Result.failure(e)
             }
-            proc = started
-            procUpstream = upstream
-            tunnelUp = false
+        proc = started
+        procUpstream = upstream
+        tunnelUp = false
+        lastExitRegion = ""
 
             // stdout pump: the console client emits one JSON notice per line
             Thread {
@@ -133,11 +152,22 @@ object PsiphonEngine {
                                     if (count >= 1) tunnelUp = true
                                 }
                                 "ConnectedServerRegion" -> {
-                                    val region = obj["data"]?.jsonObject
+                                    val regionName = obj["data"]?.jsonObject
                                         ?.get("serverRegion")?.jsonPrimitive?.content ?: "?"
+                                    lastExitRegion = regionName
                                     app.kukuvpn.bg.ServiceBridge.log(
-                                        "INFO", "psiphon exit region: $region"
+                                        "INFO", "psiphon exit region: $regionName"
                                     )
+                                }
+                                "AvailableEgressRegions" -> {
+                                    val regions = obj["data"]?.jsonObject
+                                        ?.get("regions")?.jsonArray
+                                        ?.map { it.jsonPrimitive.content } ?: emptyList()
+                                    if (regions.isNotEmpty()) {
+                                        app.kukuvpn.bg.ServiceBridge.log(
+                                            "INFO", "psiphon egress regions now: ${regions.joinToString(",")}"
+                                        )
+                                    }
                                 }
                                 else -> Unit
                             }
@@ -158,7 +188,10 @@ object PsiphonEngine {
                     }
                     val now = SystemClock.elapsedRealtime()
                     if (now > deadline) {
-                        throw IllegalStateException("psiphon boot timeout (${BOOT_CAP_MS / 1000}s)")
+                        throw IllegalStateException(
+                            "psiphon boot timeout (${BOOT_CAP_MS / 1000}s)" +
+                                (lastExitRegion.takeIf { it.isNotBlank() }?.let { " — last region: $it" } ?: "")
+                        )
                     }
                     if (now - lastTick >= TICK_MS) {
                         lastTick = now
@@ -234,11 +267,16 @@ object PsiphonEngine {
         if (missing.isNotEmpty()) store.addAll(missing)
     }
 
-    private fun buildConfig(upstream: Boolean, dataDir: String): String = buildJsonObject {
+    private fun buildConfig(upstream: Boolean, dataDir: String, egressRegion: String): String = buildJsonObject {
         put("PropagationChannelId", PROPAGATION)
         put("SponsorId", SPONSOR)
         put("ClientPlatform", "android")
         put("ClientVersion", "1")
+        if (egressRegion.isNotBlank() && egressRegion != "auto") {
+            // ISO 3166-1 alpha-2 ("US", "GB", …) — the core selects servers
+            // egressing from that country only (v1.6.0 exit-country picker)
+            put("EgressRegion", egressRegion.uppercase())
+        }
         putJsonArray("RemoteServerListURLs") {
             add(
                 buildJsonObject {

@@ -22,3 +22,16 @@ other upstream project. See TRADEMARK.md.
 
 Psiphon tunnel core (CluvexStudio/psiphon-tunnel-core fork of Psiphon-Labs/psiphon-tunnel-core)
 — GPLv3, built by CI with Go 1.22.12 and shipped as a separate process binary (libpsiphon.so).
+
+v1.6.0 Tor backend — shipped as separate process binaries (libtor.so via the
+third_party/torshim runner + pluggable transports):
+
+| Component | Role | License | Source |
+|---|---|---|---|
+| tor 0.4.8.16 | onion routing core | BSD-3-Clause | https://gitlab.torproject.org/tpo/core/tor — binary from the kmp-tor packaging (https://github.com/05nelsonm/kmp-tor, resource-compilation-lib-tor-android 408.16.4, Apache-2.0 wrapper; tor itself BSD-3) |
+| lyrebird | obfs4 (+ meek_lite) pluggable transport | MIT | https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird |
+| webtunnel | webtunnel pluggable transport | MIT | https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel |
+| scriptzteam/Tor-Bridges-Collector | fresh obfs4/webtunnel bridge lists (bundled snapshot + CI refresh) | MIT | https://github.com/scriptzteam/Tor-Bridges-Collector |
+| third_party/torshim/torrun.c | 50-line dlopen runner (this repo) | GPL-3.0-or-later | — |
+
+tor runs as an unmodified child process; no tor code is linked into the app.

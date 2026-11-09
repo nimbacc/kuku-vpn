@@ -48,6 +48,10 @@ object ServiceBridge {
     val activeProfile = MutableStateFlow<Profile?>(null)
     val lastError = MutableStateFlow<String?>(null)
     val logs = MutableStateFlow<List<LogLine>>(emptyList())
+    // v1.6.0 honesty: when the user pinned Psiphon/Tor and the pinned method
+    // failed, the successful WARP-fallback connection carries this warning
+    // (surface a banner on Home — never a plain "Connected" lie).
+    val fallbackNote = MutableStateFlow<String?>(null)
 
     val isBusy: Boolean get() = state.value in setOf(TunnelState.CONNECTING, TunnelState.VERIFYING, TunnelState.PREPARING)
 
@@ -57,6 +61,7 @@ object ServiceBridge {
         exitIp.value = ""
         activeProfile.value = null
         lastError.value = null
+        fallbackNote.value = null
     }
 
     fun lit(stage: TunnelStage) {

@@ -24,11 +24,15 @@ object OutboundFactory {
         // v1.5.0: the Psiphon transports ride the Psiphon child-process SOCKS
         // the same way (127.0.0.1:1087, or through the WARP underlay when
         // chained — the chaining lives inside the Psiphon core's config).
+        // v1.6.0: the Tor transports ride the tor child-process SOCKS the same
+        // way (127.0.0.1:1089, chained via torrc Socks5Proxy).
         val masque = profile.type == ProfileType.WIREGUARD &&
             (
                 profile.transport.startsWith("masque") ||
                     profile.transport == "psiphon" ||
-                    profile.transport == "kuku-psiphon"
+                    profile.transport == "kuku-psiphon" ||
+                    profile.transport == "tor" ||
+                    profile.transport == "kuku-tor"
                 )
         put("type", if (masque) "socks" else profile.type.name.lowercase())
         put("tag", tag)

@@ -62,6 +62,8 @@ fun HomeScreen() {
     val activeProfile by ServiceBridge.activeProfile.collectAsState()
     val scope = rememberCoroutineScope()
     val lastError by ServiceBridge.lastError.collectAsState()
+    // v1.6.0 honesty banner: pinned Psiphon/Tor fell back to WARP
+    val fallbackNote by ServiceBridge.fallbackNote.collectAsState()
 
     val settings by app.settingsStore.settings.collectAsState(initial = AppSettings())
     val profiles by app.profileStore.profiles.collectAsState(initial = emptyList())
@@ -158,6 +160,19 @@ fun HomeScreen() {
         lastError?.let {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.12f))) {
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        // v1.6.0: honest fallback warning — "Connected" only via WARP because
+        // the pinned Psiphon/Tor failed, with the REAL failure reason
+        fallbackNote?.let {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f))) {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.tertiary,
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 
