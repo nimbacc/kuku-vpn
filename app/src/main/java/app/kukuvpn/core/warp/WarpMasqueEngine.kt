@@ -6,12 +6,14 @@ import io.nekohasekai.warpcore.Warpcore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.io.File
 
 /**
@@ -22,31 +24,40 @@ import java.io.File
  * single gomobile invocation, see third_party/corebind/doc.go), so the java
  * package is io.nekohasekai.warpcore.
  *
- * MASQUE carries the WireGuard stream inside HTTP/3 (QUIC, UDP 443) or — on
- * networks where the ISP filters all UDP — HTTP/2 over plain TCP 443, which
- * is indistinguishable from ordinary HTTPS. This is the path that works when
- * the classic WireGuard-on-UDP sweep times out.
+ * v1.2.7: the Go engine RACES BOTH wire formats at once (MASQUE over
+ * HTTP/3, UDP 443 — and MASQUE over HTTP/2, plain TCP 443), each with its
+ * own endpoint sweep, and the first one to prove a real round-trip wins.
+ * On networks where the ISP filters UDP the TCP sweep wins in ~2-5s; on
+ * UDP-friendly networks UDP wins. There is no H2-vs-H3 guesswork and no
+ * serial fallback walk to sit through — [boot] is mode-free.
  *
  * Lifecycle (all calls are blocking, run them off the main thread):
  *  1. [ensureRegistered] — once per install; creates the CF device identity.
- *  2. [boot]             — the ONLY entry point to bring the tunnel up since
- *     v1.2.4: single-flight, mode-aware, and shared by the app-open prewarm
- *     and the connect flow. Returns only after the tunnel is verified with a
- *     real round-trip and the local SOCKS port accepts; sing-box then routes
- *     the profile through 127.0.0.1:[SOCKS_PORT].
- *  3. [stop]             — always before switching H3/H2 or tearing down.
+ *  2. [boot]             — the ONLY entry point to bring the tunnel up:
+ *     single-flight, shared by the app-open prewarm and the connect flow.
+ *     Returns only after the tunnel is verified with a real round-trip and
+ *     the local SOCKS port accepts; sing-box then routes the profile through
+ *     127.0.0.1:[SOCKS_PORT].
+ *  3. [stop]             — tears the engine down; safe to call repeatedly.
  */
 object WarpMasqueEngine {
 
     /** Local SOCKS5 port the engine exposes to sing-box. */
     const val SOCKS_PORT = 2085
 
+    /**
+     * v1.2.7 hard cap on a full boot, enforced on the Kotlin side as a
+     * second net under the Go sweep's own 45s cap. The first "eternal
+     * Connecting" field report was a Go-side deadlock that outlived every
+     * Go-side deadline; if anything wedges again, the connect flow now
+     * tears the engine down from outside and fails loudly instead of
+     * hanging forever.
+     */
+    private const val BOOT_HARD_CAP_MS = 60_000L
+
     @Volatile private var started = false
 
-    /** Transport mode of the RUNNING engine (null = not running / unknown). */
-    @Volatile private var runningUseHttp2: Boolean? = null
-
-    /** Serializes boots; prewarm and connect share one boot per mode. */
+    /** Serializes boots; prewarm and connect share one boot. */
     private val bootMutex = Mutex()
 
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -73,78 +84,93 @@ object WarpMasqueEngine {
      * second caller awaits the first, then reuses the running engine.
      *
      * BUG (v1.2.6): the reuse was MODE-GATED — a boot for the other transport
-     * STOPPED the warm engine and re-swept. The prewarm validates H2 (TCP 443,
-     * the survivable path) while the selected profile was often the H3 one, so
-     * the connect flow killed a freshly validated tunnel and re-paid a full
-     * sweep in the mode the ISP was more likely to block. The SOCKS outbound is
-     * transport-agnostic — 127.0.0.1:[SOCKS_PORT] speaks the same protocol
-     * whichever wire format the engine uses inside — so ANY warm engine is
-     * reused and the mode only decides how a COLD boot sweeps. A failed
-     * verification still stops the engine, so a dead tunnel is never carried
-     * over to the next candidate.
+     * STOPPED the warm engine and re-swept. The SOCKS outbound is
+     * transport-agnostic, so ANY warm engine is reused.
      *
-     * The engine's endpoint sweep is hard-bounded on the Go side and RACED
-     * in waves of 4 (v1.2.5): ≤~20s worst case, ~2-5s typical, hard cap 45s.
-     * [onTick] fires every ~5s meanwhile so the log shows progress instead
-     * of a silent minute — the "frozen on booting engine" report.
+     * BUG (v1.2.7): the tick watchdog used to start only AFTER the boot mutex
+     * was acquired, so a connect tap landing during the app-open prewarm sat
+     * SILENT for the whole prewarm boot — the "booting… then nothing, no
+     * ticks" field report. The watchdog now covers the entire call: mutex
+     * wait, registration and the Go sweep. And [start] is wrapped in a hard
+     * [BOOT_HARD_CAP_MS] cap that tears the engine down from outside if the
+     * Go side ever wedges (the v1.2.6 gVisor close-deadlock did exactly that).
      */
     suspend fun boot(
         context: Context,
-        useHttp2: Boolean,
         onTick: ((Long) -> Unit)? = null,
-    ): Result<Unit> = bootMutex.withLock {
-        if (isRunning()) {
-            return@withLock Result.success(Unit) // warm engine — any mode wins
-        }
-        runCatching {
-            withContext(Dispatchers.IO) {
-                ensureRegistered(context)
-                stop() // stale instance — deterministic teardown, then a cold boot
-                val t0 = SystemClock.elapsedRealtime()
-                val watchdog = onTick?.let { tick ->
-                    engineScope.launch {
-                        while (isActive) {
-                            delay(5_000)
-                            tick(SystemClock.elapsedRealtime() - t0)
-                        }
-                    }
-                }
-                try {
-                    start(context, useHttp2)
-                } finally {
-                    watchdog?.cancel()
+    ): Result<Unit> {
+        val t0 = SystemClock.elapsedRealtime()
+        val watchdog = onTick?.let { tick ->
+            engineScope.launch {
+                while (isActive) {
+                    delay(5_000)
+                    tick(SystemClock.elapsedRealtime() - t0)
                 }
             }
-        }.onFailure { runningUseHttp2 = null }
+        }
+        try {
+            return bootMutex.withLock {
+                if (isRunning()) {
+                    return@withLock Result.success(Unit) // warm engine — any mode wins
+                }
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        ensureRegistered(context)
+                        stop() // stale instance — deterministic teardown, then a cold boot
+                        start(context)
+                    }
+                }
+            }
+        } finally {
+            watchdog?.cancel()
+        }
     }
 
     /**
-     * App-open prewarm (v1.2.4): boot the engine for the chain-leading mode
-     * (MASQUE H2 over TCP 443 — the most survivable path) in the background
-     * so the FIRST tap finds a warm, already-validated tunnel instead of
-     * paying the cold endpoint sweep. Safe to call unconditionally: boot()
-     * is single-flight and reuses the engine whatever mode it runs (v1.2.6).
+     * App-open prewarm (v1.2.4): boot the engine in the background so the
+     * FIRST tap finds a warm, already-validated tunnel instead of paying
+     * the cold endpoint sweep. Since v1.2.7 the boot races both transports
+     * (TCP 443 + UDP 443), so no mode decision is needed here.
+     * Safe to call unconditionally: boot() is single-flight and reuses the
+     * engine whatever mode it raced.
      */
     fun prewarm(context: Context) {
         engineScope.launch {
-            runCatching { boot(context, useHttp2 = true) }
+            runCatching { boot(context) }
             // silent: the connect flow retries with full logging + fallback
         }
     }
 
-    fun start(context: Context, useHttp2: Boolean) {
+    private suspend fun start(context: Context) {
         stop() // deterministic teardown of any previous instance
-        // gomobile binds Go int as Java long
-        Warpcore.start(configDir(context), SOCKS_PORT.toLong(), useHttp2)
+        var bootError: Exception? = null
+        val job = engineScope.launch {
+            try {
+                // v1.2.7: StartAuto — the engine races TCP-443/H2 and
+                // UDP-443/H3 sweeps in parallel; gomobile binds Go int as
+                // Java long
+                Warpcore.startAuto(configDir(context), SOCKS_PORT.toLong())
+            } catch (e: Exception) {
+                bootError = e // isolated job: no outer cancellation to honor
+            }
+        }
+        try {
+            withTimeout(BOOT_HARD_CAP_MS) { job.join() }
+        } catch (e: TimeoutCancellationException) {
+            // the Go sweep outlived every internal deadline (or wedged) —
+            // tear it down from outside and fail loudly; the connect flow
+            // moves to the next candidate instead of hanging forever
+            stop()
+            throw IllegalStateException("WARP engine boot exceeded ${BOOT_HARD_CAP_MS / 1000}s hard cap")
+        }
+        bootError?.let { throw it }
         started = true
-        runningUseHttp2 = useHttp2
     }
 
     /** Tears the engine down; safe to call repeatedly. */
     fun stop() {
         runCatching { Warpcore.stop() }
         started = false
-        runningUseHttp2 = null
     }
 
     fun isRunning(): Boolean =

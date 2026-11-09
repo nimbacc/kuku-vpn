@@ -241,24 +241,27 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         "reusing warm WARP engine (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT})"
                     )
                 } else try {
-                    ServiceBridge.log("INFO", "booting WARP MASQUE engine (${candidate.transport})")
+                    // v1.2.7: the engine RACES both wire formats at once
+                    // (MASQUE over TCP 443 + MASQUE over UDP 443), so the
+                    // profile's h2/h3 label no longer chooses a boot mode.
+                    ServiceBridge.log(
+                        "INFO",
+                        "booting WARP engine (racing TCP-443 + UDP-443 sweeps)"
+                    )
                     val bootStart = android.os.SystemClock.elapsedRealtime()
-                    // v1.2.4: single-flight boot shared with the app-open
-                    // prewarm — a tap while the prewarm sweep is running now
-                    // WAITS for it instead of colliding with the engine's
-                    // "already running" guard. v1.2.5: the engine RACES its
-                    // endpoints in waves of 4 (≤~20s worst, ~2-5s typical) and
-                    // onTick keeps the log alive so a slow cold boot never
-                    // looks frozen again. v1.2.6: any warm engine is reused,
-                    // whatever mode it runs.
+                    // single-flight boot shared with the app-open prewarm —
+                    // a tap while the prewarm sweep is running WAITS for it
+                    // (ticks keep flowing the whole time now), then reuses
+                    // the running engine. The boot hard-caps at 60s: if the
+                    // Go side ever wedges it is torn down from outside and
+                    // the chain moves on instead of hanging forever.
                     WarpMasqueEngine.boot(
                         this,
-                        useHttp2 = candidate.transport == WarpRegistrar.TRANSPORT_MASQUE_H2,
                         onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
-                        "WARP MASQUE engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}, " +
+                        "WARP engine ready (socks 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}, " +
                             "${android.os.SystemClock.elapsedRealtime() - bootStart}ms)"
                     )
                 } catch (e: Exception) {
