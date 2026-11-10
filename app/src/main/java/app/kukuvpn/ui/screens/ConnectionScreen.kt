@@ -35,14 +35,17 @@ import kotlinx.coroutines.launch
 
 /**
  * v1.3.0 — the Connection page (modeled on the Aether screenshots the user
- * shared): method selector + scan mode. The method decides what is tried
- * FIRST on connect (the ranked Smart chain always rides behind a pinned
- * method as the safety net), the scan mode tunes how hard and how long the
- * engine sweeps before handing over.
+ * shared). The scan mode tunes how hard and how long the engine sweeps
+ * before handing over.
  *
- * v1.6.0 — Tor + Kuku→Tor methods, the Psiphon exit-country selector
- * (Aether-style location picking, wired to the core's real EgressRegion) and
- * the Tor bridge selector (auto fresh bridges / custom pasted lines / none).
+ * v1.6.7 — the Aether split the user drew: TWO independent selectors instead
+ * of one mixed list, freely combinable like in Aether itself:
+ *   پروتکل (Protocol): no protocol / Psiphon / Tor — WHAT carries the traffic;
+ *   شبکه (Network):    Direct / Smart / WARP-MASQUE / WARP-WireGuard / Gool —
+ *                      HOW it reaches the internet. Direct = the core connects
+ *                      straight from the ISP = Aether's own architecture and
+ *                      the user's proven fast path.
+ * (v1.6.0 left the old per-protocol cards: Psiphon exit country + Tor bridges.)
  */
 @Composable
 fun ConnectionScreen(onBack: () -> Unit) {
@@ -60,26 +63,21 @@ fun ConnectionScreen(onBack: () -> Unit) {
         }
         Text(stringResource(R.string.conn_title), style = MaterialTheme.typography.headlineSmall)
 
-        /* ------------------------------ method ------------------------------ */
+        /* ------------------- protocol (پروتکل) ------------------------------- */
         Card {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(R.string.conn_protocol), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.conn_proto_title), style = MaterialTheme.typography.titleMedium)
                 Text(
-                    stringResource(R.string.conn_protocol_desc),
+                    stringResource(R.string.conn_proto_desc),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val methods = listOf(
-                    Triple(FallbackEngine.PROTOCOL_SMART, R.string.conn_smart, R.string.conn_smart_desc),
-                    Triple(FallbackEngine.PROTOCOL_MASQUE, R.string.conn_masque, R.string.conn_masque_desc),
-                    Triple(FallbackEngine.PROTOCOL_WG, R.string.conn_wg, R.string.conn_wg_desc),
-                    Triple(FallbackEngine.PROTOCOL_GOOL, R.string.conn_gool, R.string.conn_gool_desc),
-                    Triple(FallbackEngine.PROTOCOL_PSIPHON, R.string.conn_psiphon, R.string.conn_psiphon_desc),
-                    Triple(FallbackEngine.PROTOCOL_KUKU_PSIPHON, R.string.conn_kuku_psiphon, R.string.conn_kuku_psiphon_desc),
-                    Triple(FallbackEngine.PROTOCOL_TOR, R.string.conn_tor, R.string.conn_tor_desc),
-                    Triple(FallbackEngine.PROTOCOL_KUKU_TOR, R.string.conn_kuku_tor, R.string.conn_kuku_tor_desc),
+                val protos = listOf(
+                    Triple(FallbackEngine.PROTO_NONE, R.string.proto_none, R.string.proto_none_desc),
+                    Triple(FallbackEngine.PROTO_PSIPHON, R.string.proto_psiphon, R.string.proto_psiphon_desc),
+                    Triple(FallbackEngine.PROTO_TOR, R.string.proto_tor, R.string.proto_tor_desc),
                 )
-                methods.forEach { (value, title, desc) ->
+                protos.forEach { (value, title, desc) ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -104,9 +102,65 @@ fun ConnectionScreen(onBack: () -> Unit) {
             }
         }
 
+        /* ---------------------- network (شبکه) ------------------------------- */
+        Card {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.conn_network_title), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.conn_network_desc),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // Direct only makes sense with a protocol core; a plain VPN has
+                // no protocol to "direct" — so the list adapts like Aether's.
+                // A stored Direct pin (picked while a protocol was active) shows
+                // as Smart until the user taps something; the engine coerces
+                // direct→smart for protocol=none the same way.
+                val netNow = if (settings.protocol == FallbackEngine.PROTO_NONE &&
+                    settings.network == FallbackEngine.NET_DIRECT
+                ) FallbackEngine.NET_SMART else settings.network
+                val networks = if (settings.protocol == FallbackEngine.PROTO_NONE) {
+                    listOf(
+                        Triple(FallbackEngine.NET_SMART, R.string.net_smart, R.string.net_smart_desc),
+                        Triple(FallbackEngine.NET_MASQUE, R.string.net_masque, R.string.net_masque_desc),
+                        Triple(FallbackEngine.NET_WG, R.string.net_wg, R.string.net_wg_desc),
+                        Triple(FallbackEngine.NET_GOOL, R.string.net_gool, R.string.net_gool_desc),
+                    )
+                } else {
+                    listOf(
+                        Triple(FallbackEngine.NET_DIRECT, R.string.net_direct, R.string.net_direct_desc),
+                        Triple(FallbackEngine.NET_SMART, R.string.net_smart, R.string.net_smart_desc),
+                        Triple(FallbackEngine.NET_MASQUE, R.string.net_masque, R.string.net_masque_desc),
+                        Triple(FallbackEngine.NET_WG, R.string.net_wg, R.string.net_wg_desc),
+                    )
+                }
+                networks.forEach { (value, title, desc) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { scope.launch { app.settingsStore.setNetwork(value) } }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        RadioButton(
+                            selected = netNow == value,
+                            onClick = { scope.launch { app.settingsStore.setNetwork(value) } },
+                        )
+                        Column(Modifier.padding(start = 4.dp)) {
+                            Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                stringResource(desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         /* --------------------- psiphon exit country ------------------------- */
-        val psiphonPinned = settings.protocol == FallbackEngine.PROTOCOL_PSIPHON ||
-            settings.protocol == FallbackEngine.PROTOCOL_KUKU_PSIPHON
+        val psiphonPinned = settings.protocol == FallbackEngine.PROTO_PSIPHON
         if (psiphonPinned) {
             Card {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -146,8 +200,7 @@ fun ConnectionScreen(onBack: () -> Unit) {
         }
 
         /* --------------------------- tor bridges ---------------------------- */
-        val torPinned = settings.protocol == FallbackEngine.PROTOCOL_TOR ||
-            settings.protocol == FallbackEngine.PROTOCOL_KUKU_TOR
+        val torPinned = settings.protocol == FallbackEngine.PROTO_TOR
         if (torPinned) {
             Card {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -231,45 +284,6 @@ fun ConnectionScreen(onBack: () -> Unit) {
                         RadioButton(
                             selected = settings.scanMode == value,
                             onClick = { scope.launch { app.settingsStore.setScanMode(value) } },
-                        )
-                        Column(Modifier.padding(start = 4.dp)) {
-                            Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                stringResource(desc),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        /* --------------------------- underlay wire --------------------------- */
-        Card {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(stringResource(R.string.conn_underlay), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    stringResource(R.string.conn_underlay_desc),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                val wires = listOf(
-                    Triple("smart", R.string.underlay_smart, R.string.underlay_smart_desc),
-                    Triple("wg", R.string.underlay_wg, R.string.underlay_wg_desc),
-                    Triple("masque", R.string.underlay_masque, R.string.underlay_masque_desc),
-                )
-                wires.forEach { (value, title, desc) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { scope.launch { app.settingsStore.setUnderlayWire(value) } }
-                            .padding(vertical = 4.dp),
-                    ) {
-                        RadioButton(
-                            selected = settings.underlayWire == value,
-                            onClick = { scope.launch { app.settingsStore.setUnderlayWire(value) } },
                         )
                         Column(Modifier.padding(start = 4.dp)) {
                             Text(stringResource(title), style = MaterialTheme.typography.titleSmall)

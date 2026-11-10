@@ -143,7 +143,30 @@ fun ProfilesScreen(snackbar: SnackbarHostState) {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            RadioButton(selected = p.id == selectedId, onClick = { scope.launch { app.profileStore.select(p.id) } })
+                            RadioButton(
+                                selected = p.id == selectedId,
+                                onClick = {
+                                    scope.launch {
+                                        app.profileStore.select(p.id)
+                                        // v1.6.7: tapping a bundled Psiphon/Tor
+                                        // profile also pins the PROTOCOL — the
+                                        // old "tapped Psiphon, connect rode WARP"
+                                        // surprise is structurally impossible.
+                                        // Network follows the Aether golden path:
+                                        // DIRECT (the user's proven fast route).
+                                        when (p.fromSubscription) {
+                                            "psiphon" -> {
+                                                app.settingsStore.setProtocol(app.kukuvpn.core.fallback.FallbackEngine.PROTO_PSIPHON)
+                                                app.settingsStore.setNetwork(app.kukuvpn.core.fallback.FallbackEngine.NET_DIRECT)
+                                            }
+                                            "tor" -> {
+                                                app.settingsStore.setProtocol(app.kukuvpn.core.fallback.FallbackEngine.PROTO_TOR)
+                                                app.settingsStore.setNetwork(app.kukuvpn.core.fallback.FallbackEngine.NET_DIRECT)
+                                            }
+                                        }
+                                    }
+                                },
+                            )
                             Column(Modifier.weight(1f)) {
                                 Text(p.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
                                 Text(p.summary(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

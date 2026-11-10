@@ -38,26 +38,29 @@
 
     <!-- Connection page (v1.3.0 method selector) -->
     <string name="conn_title">Connection</string>
-    <string name="conn_protocol">Method</string>
-    <string name="conn_protocol_desc">What is tried first on connect. Smart stays behind every pinned method as a safety net, so a pinned method can never leave you offline.</string>
-    <string name="conn_smart">Smart</string>
-    <string name="conn_smart_desc">Races two routes at the same time (TCP-443 and UDP-443) and remembers which one worked on this network, so the next connect is quick.</string>
-    <string name="conn_masque">MASQUE</string>
-    <string name="conn_masque_desc">WARP over MASQUE only — the two MASQUE wire formats (TCP-443 + UDP-443) still race each other.</string>
-    <string name="conn_wg">WireGuard</string>
-    <string name="conn_wg_desc">Plain WireGuard straight to Cloudflare (UDP). The fastest when UDP is not filtered.</string>
-    <string name="conn_gool">WARP ×2 (Gool)</string>
-    <string name="conn_gool_desc">Two WARP tunnels chained — the second hop rides inside the first. Slower per-hop, sometimes faster end-to-end. Experimental.</string>
+    <!-- v1.6.7 — the Aether split: two independent selectors (پروتکل × شبکه) -->
+    <string name="conn_proto_title">Protocol</string>
+    <string name="conn_proto_desc">What carries your traffic — a protocol core, or none for a plain VPN. Freely combinable with any network below, exactly like Aether.</string>
+    <string name="proto_none">No protocol (plain VPN)</string>
+    <string name="proto_none_desc">Only the tunnel — no protocol core. The network choice below is the whole connection.</string>
+    <string name="proto_psiphon">Psiphon</string>
+    <string name="proto_psiphon_desc">The Psiphon network (bundled core) — rotating transports built for filtered networks. Slower than WARP, much harder to block. Exclusive: on failure you get the real error, never a silent WARP swap.</string>
+    <string name="proto_tor">Tor</string>
+    <string name="proto_tor_desc">The real Tor network (bundled tor 0.4.8, obfs4 + webtunnel bridges). Slowest option, strongest censorship resistance. Exclusive: on failure you get the real error, never a silent WARP swap.</string>
+    <string name="conn_network_title">Network</string>
+    <string name="conn_network_desc">How the connection reaches the internet — independent of the protocol. Direct is Aether\'s architecture: the core connects straight from your ISP, no WARP in the middle.</string>
+    <string name="net_direct">Direct (no WARP)</string>
+    <string name="net_direct_desc">Straight from your ISP — Aether\'s own architecture and the proven fastest path. Only offered together with a protocol.</string>
+    <string name="net_smart">Smart</string>
+    <string name="net_smart_desc">With a protocol: direct first, then the WARP-chained path as a safety net. Plain VPN: the auto-ranked WARP chain (MASQUE TCP-443 → UDP-443 → WireGuard).</string>
+    <string name="net_masque">WARP · MASQUE</string>
+    <string name="net_masque_desc">WARP over MASQUE (the TCP-443 + UDP-443 wires race). With a protocol: the chain rides ONLY the MASQUE engine.</string>
+    <string name="net_wg">WARP · WireGuard</string>
+    <string name="net_wg_desc">Plain WireGuard straight to Cloudflare (UDP). With a protocol: the chain rides ONLY the WireGuard sidecar — an ISP reset fails honestly.</string>
+    <string name="net_gool">WARP ×2 (Gool)</string>
+    <string name="net_gool_desc">Two WARP tunnels chained — the second hop rides inside the first. Plain VPN only. Experimental.</string>
     <string name="conn_scan">Scan mode</string>
     <string name="conn_scan_desc">How hard and how long the engine hunts for a working endpoint before handing over.</string>
-    <string name="conn_underlay">Underlay wire (chained modes)</string>
-    <string name="conn_underlay_desc">Which tunnel carries Kuku → Psiphon and Kuku → Tor. Aether\'s proven recipe on hostile networks is a WireGuard underlay — Kuku\'s MASQUE engine cannot speak WireGuard, so the WireGuard sidecar (a second, TUN-less engine over your registered WARP WireGuard identity) provides it.</string>
-    <string name="underlay_smart">Auto — WireGuard first</string>
-    <string name="underlay_smart_desc">Real WireGuard sidecar first, MASQUE engine as fallback. Recommended.</string>
-    <string name="underlay_wg">WireGuard only</string>
-    <string name="underlay_wg_desc">The chain rides only the WireGuard sidecar (the wire Aether uses). Falls back to MASQUE only if no WireGuard profile exists.</string>
-    <string name="underlay_masque">MASQUE only</string>
-    <string name="underlay_masque_desc">The pre-1.6.5 behavior: the chain rides the MASQUE engine (QUIC/H3 + HTTP/2 wires).</string>
     <string name="scan_turbo">Turbo</string>
     <string name="scan_turbo_desc">Shortest sweep — connect fast or move on.</string>
     <string name="scan_balanced">Balanced</string>
@@ -69,20 +72,15 @@
     <string name="scan_ironclad">Ironclad</string>
     <string name="scan_ironclad_desc">The longest, most persistent sweep — every transport, every endpoint.</string>
     <string name="conn_applies_next">Takes effect on the next connect.</string>
+    <string name="settings_conn_summary">Protocol: %1$s · Network: %2$s</string>
 
-    <!-- Psiphon backends (v1.5.0) -->
-    <string name="conn_psiphon">Psiphon</string>
-    <string name="conn_psiphon_desc">The Psiphon network (bundled core) — rotating client/server transports built for filtered networks. Slower than WARP, much harder to block. Exclusive: if Psiphon can\'t connect, Kuku reports the real error — it never silently switches you to WARP.</string>
-    <string name="conn_kuku_psiphon">Kuku → Psiphon</string>
-    <string name="conn_kuku_psiphon_desc">Psiphon reached through your WARP tunnel — for networks where Psiphon\'s own fronting is blocked but WARP gets out. The exit IP is still Psiphon\'s; WARP is only the road there.</string>
+    <!-- Psiphon backends (v1.5.0) — selector strings moved to the v1.6.7
+         proto_* card; the auto-managed profile names stay -->
     <string name="psiphon_profile_name">Psiphon (Free)</string>
     <string name="psiphon_chain_profile_name">Kuku → Psiphon</string>
 
-    <!-- Tor backends (v1.6.0) -->
-    <string name="conn_tor">Tor</string>
-    <string name="conn_tor_desc">The real Tor network (bundled tor 0.4.8) — obfs4 and webtunnel bridges with a fresh list baked in on every build. Slowest option, strongest censorship resistance. Exclusive: if Tor can\'t bootstrap, Kuku reports the real error — it never silently switches you to WARP.</string>
-    <string name="conn_kuku_tor">Kuku → Tor</string>
-    <string name="conn_kuku_tor_desc">Tor reached through your WARP tunnel — for networks where tor itself is unreachable but WARP gets out. Runs without bridges (WARP plays the bridge). The exit IP is still Tor\'s; WARP is only the road there.</string>
+    <!-- Tor backends (v1.6.0) — selector strings moved to the v1.6.7
+         proto_* card; the auto-managed profile names stay -->
     <string name="tor_profile_name">Tor (Free)</string>
     <string name="tor_chain_profile_name">Kuku → Tor</string>
 
@@ -182,6 +180,7 @@
     <string name="about_github_hint">Source code, issues and new releases</string>
     <string name="about_changes">Recent changes</string>
     <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
+    <string name="about_change_167">1.6.7 — The Aether split, exactly as you drew it: the Connection page now has two independent selectors — پروتکل (Protocol: none / Psiphon / Tor) and شبکه (Network: Direct / Smart / WARP-MASQUE / WARP-WireGuard). Psiphon and Tor try DIRECT first — straight from your ISP, Aether\'s own architecture and your proven fast path — instead of burning minutes on the WARP-chained path whose WireGuard underlay your ISP resets and whose MASQUE underlay leaves the core silent. A silent Psiphon core (no network notices in 75s) now fails fast instead of stalling for the full 4-minute cap. The old single method list and the underlay-wire selector are gone; old picks migrate automatically</string>
     <string name="about_change_166">1.6.6 — Fixed the WireGuard-underlay instant death your 1.6.5 log exposed: the sidecar engine was usually the session\'s first libbox user and its cache file landed on the read-only root (\"initialize cache-file: open cache.db: read-only file system\") — the environment setup the main core always did now also runs before the sidecar (sandbox-proven both ways on the real libbox). WireGuard-only mode no longer silently switches wires on failure, and a warm MASQUE engine with a dead egress is probed with a real request and failed honestly in seconds instead of stalling the boot for minutes</string>
     <string name="about_change_165">1.6.5 — The two-part split you drew from Aether: the chained modes (Kuku → Psiphon / Kuku → Tor) now ride a REAL WireGuard underlay by default (a second TUN-less engine over your registered WARP WireGuard identity — the wire Aether uses), with the MASQUE engine as fallback, and a new Underlay-wire selector on the Connection page (Auto / WireGuard only / MASQUE only)</string>
     <string name="about_change_164">1.6.4 — Psiphon now tries the WARP-chained path first (the same architecture you proved works on your ISP via Aether), a failing exit country automatically retries once with auto exit, and boot ticks show live progress: API reached · server list · session opening · exit region</string>

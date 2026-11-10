@@ -36,26 +36,29 @@
 
     <!-- Connection page (v1.3.0 method selector) -->
     <string name="conn_title">اتصال</string>
-    <string name="conn_protocol">روش اتصال</string>
-    <string name="conn_protocol_desc">مشخص می‌کند روی اتصال، اول از چه مسیری استفاده شود. «هوشمند» همیشه پشت هر روش انتخابی می‌ماند، پس انتخاب روش هرگز شما را بی‌اینترنت نمی‌کند.</string>
-    <string name="conn_smart">هوشمند</string>
-    <string name="conn_smart_desc">دو مسیر را همزمان امتحان می‌کند (TCP-443 و UDP-443) و به یاد می‌سپارد کدام روی این شبکه جواب داده تا اتصال بعدی سریع باشد.</string>
-    <string name="conn_masque">MASQUE</string>
-    <string name="conn_masque_desc">فقط WARP روی MASQUE — دو شکل سیمی MASQUE (TCP-443 و UDP-443) باز هم با هم مسابقه می‌دهند.</string>
-    <string name="conn_wg">WireGuard</string>
-    <string name="conn_wg_desc">WireGuard مستقیم به کلادفلر (UDP). وقتی UDP فیلتر نشده باشد سریع‌ترین گزینه است.</string>
-    <string name="conn_gool">WARP ×2 (گول)</string>
-    <string name="conn_gool_desc">دو تونل WARP پشت‌سرهم — هاپ دوم داخل هاپ اول سوار می‌شود. هر هاپ کندتر است ولی گاهی کل مسیر سریع‌تر تمام می‌شود. آزمایشی.</string>
+    <!-- v1.6.7 — تفکیک اتری: دو انتخاب مستقل (پروتکل × شبکه) -->
+    <string name="conn_proto_title">پروتکل</string>
+    <string name="conn_proto_desc">حامل ترافیک شما — یک هستهٔ پروتکل، یا «بدون پروتکل» برای یک VPN ساده. با هر شبکه‌ای در پایین آزادانه ترکیب می‌شود — دقیقاً مثل اتر.</string>
+    <string name="proto_none">بدون پروتکل (VPN ساده)</string>
+    <string name="proto_none_desc">فقط تونل — بدون هستهٔ پروتکل. انتخاب شبکه در پایین، کل اتصال است.</string>
+    <string name="proto_psiphon">سایفون</string>
+    <string name="proto_psiphon_desc">شبکهٔ سایفون (هستهٔ همراه برنامه) — روش‌های چرخشی مخصوص شبکه‌های فیلترشده. از WARP کندتر است ولی به‌مراتب سخت‌تر بلاک می‌شود. انحصاری: در صورت خطا، خطای واقعی را می‌بینید — هرگز بی‌صدا به WARP برنمی‌گردد.</string>
+    <string name="proto_tor">تور (Tor)</string>
+    <string name="proto_tor_desc">شبکهٔ واقعی تور (tor 0.4.8 همراه برنامه، با پل‌های obfs4 و webtunnel). کندترین گزینه، مقاوم‌ترین در برابر فیلترینگ. انحصاری: در صورت خطا، خطای واقعی را می‌بینید — هرگز بی‌صدا به WARP برنمی‌گردد.</string>
+    <string name="conn_network_title">شبکه</string>
+    <string name="conn_network_desc">اتصال چگونه به اینترنت می‌رسد — مستقل از پروتکل. «مستقیم» معماری اتر است: هسته مستقیم از اپراتور شما وصل می‌شود، بدون WARP در میان.</string>
+    <string name="net_direct">مستقیم (بدون وارپ)</string>
+    <string name="net_direct_desc">مستقیم از اپراتور شما — همان معماری اتر و سریع‌ترین مسیر اثبات‌شده. فقط همراه یک پروتکل ارائه می‌شود.</string>
+    <string name="net_smart">هوشمند</string>
+    <string name="net_smart_desc">با پروتکل: اول مستقیم، بعد مسیر زنجیرهٔ WARP به‌عنوان پشتیبان. بدون پروتکل: زنجیرهٔ کامل ارزیابی‌شدهٔ WARP (ماسک TCP-443 ← UDP-443 ← وایرگارد).</string>
+    <string name="net_masque">وارپ · ماسک (MASQUE)</string>
+    <string name="net_masque_desc">وارپ روی ماسک (مسابقهٔ سیم‌های TCP-443 و UDP-443). با پروتکل: زنجیره فقط از موتور ماسک می‌گذرد.</string>
+    <string name="net_wg">وارپ · وایرگارد (WireGuard)</string>
+    <string name="net_wg_desc">وایرگارد خالص مستقیم به کلادفلر (UDP). با پروتکل: زنجیره فقط از سایدکار وایرگارد می‌گذرد — اگر اپراتور آن را قطع کند، صادقانه خطا می‌بینید.</string>
+    <string name="net_gool">وارپ ×۲ (گول)</string>
+    <string name="net_gool_desc">دو تونل WARP پشت‌سرهم — هاپ دوم داخل هاپ اول سوار می‌شود. فقط VPN ساده. آزمایشی.</string>
     <string name="conn_scan">حالت جست‌وجو</string>
     <string name="conn_scan_desc">مشخص می‌کند موتور چقدر سخت و چقدر طولانی دنبال یک نقطهٔ پایانی سالم بگردد.</string>
-    <string name="conn_underlay">سیم زیرلایه (حالت‌های زنجیره‌ای)</string>
-    <string name="conn_underlay_desc">کدام تونل حامل Kuku → Psiphon و Kuku → Tor باشد. دستور همیشگی Aether روی شبکه‌های ستمگر زیرلایهٔ WireGuard است — موتور MASQUE کوکو اصلاً WireGuard بلد نیست، پس سایدکار WireGuard (یک موتور دوم بدون TUN روی هویت WireGuard ثبت‌شدهٔ WARP شما) آن را فراهم می‌کند.</string>
-    <string name="underlay_smart">خودکار — اول WireGuard</string>
-    <string name="underlay_smart_desc">اول سایدکار واقعی WireGuard، موتور MASQUE فقط به‌عنوان جایگزین. پیشنهادشده.</string>
-    <string name="underlay_wg">فقط WireGuard</string>
-    <string name="underlay_wg_desc">زنجیره فقط روی سایدکار WireGuard می‌رود (همان سیمی که Aether استفاده می‌کند). فقط اگر پروفایل WireGuard وجود نداشته باشد به MASQUE برمی‌گردد.</string>
-    <string name="underlay_masque">فقط MASQUE</string>
-    <string name="underlay_masque_desc">رفتار قبل از ۱.۶.۵: زنجیره روی موتور MASQUE می‌رود (سیم‌های QUIC/H3 و HTTP/2).</string>
     <string name="scan_turbo">توربو</string>
     <string name="scan_turbo_desc">کوتاه‌ترین جست‌وجو — سریع وصل شو یا برو سراغ بعدی.</string>
     <string name="scan_balanced">متعادل</string>
@@ -67,20 +70,13 @@
     <string name="scan_ironclad">زره‌پوش</string>
     <string name="scan_ironclad_desc">طولانی‌ترین و پایدارترین جست‌وجو — همهٔ مسیرها، همهٔ نقاط پایانی.</string>
     <string name="conn_applies_next">از اتصال بعدی اعمال می‌شود.</string>
+    <string name="settings_conn_summary">پروتکل: %1$s · شبکه: %2$s</string>
 
-    <!-- Psiphon backends (v1.5.0) -->
-    <string name="conn_psiphon">سایفون</string>
-    <string name="conn_psiphon_desc">شبکهٔ سایفون (هستهٔ همراه برنامه) — روش‌های چرخشی کلاینت/سرور مخصوص شبکه‌های فیلترشده. از WARP کندتر است ولی به‌مراتب سخت‌تر بلاک می‌شود. انحصاری: اگر سایفون وصل نشود، کوکو خطای واقعی را نشان می‌دهد — هرگز بی‌صدا شما را به WARP نمی‌برد.</string>
-    <string name="conn_kuku_psiphon">کوکو → سایفون</string>
-    <string name="conn_kuku_psiphon_desc">سایفون از دل تونل WARP — برای شبکه‌هایی که خودِ سایفون بلاک است ولی WARP بیرون می‌زند. آی‌پی خروجی همچنان سایفون است؛ WARP فقط جادهٔ رسیدن به آن است.</string>
+    <!-- Psiphon backends (v1.5.0) — رشته‌های انتخابگر به کارت proto_* در 1.6.7 منتقل شد؛ نام پروفایل‌ها می‌ماند -->
     <string name="psiphon_profile_name">سایفون (رایگان)</string>
     <string name="psiphon_chain_profile_name">کوکو → سایفون</string>
 
-    <!-- Tor backends (v1.6.0) -->
-    <string name="conn_tor">تور (Tor)</string>
-    <string name="conn_tor_desc">شبکهٔ واقعی تور (tor 0.4.8 همراه برنامه) — با پل‌های obfs4 و webtunnel که فهرست تازهٔ آن‌ها در هر بیلد داخل برنامه قرار می‌گیرد. کندترین گزینه، مقاوم‌ترین در برابر فیلترینگ. انحصاری: اگر تور بوت نشود، کوکو خطای واقعی را نشان می‌دهد — هرگز بی‌صدا شما را به WARP نمی‌برد.</string>
-    <string name="conn_kuku_tor">کوکو → تور</string>
-    <string name="conn_kuku_tor_desc">تور از دل تونل WARP — برای شبکه‌هایی که خودِ تور در دسترس نیست ولی WARP بیرون می‌زند. بدون پل اجرا می‌شود (WARP نقش پل را بازی می‌کند). آی‌پی خروجی همچنان تور است؛ WARP فقط جادهٔ رسیدن به آن است.</string>
+    <!-- Tor backends (v1.6.0) — رشته‌های انتخابگر به کارت proto_* در 1.6.7 منتقل شد؛ نام پروفایل‌ها می‌ماند -->
     <string name="tor_profile_name">تور (رایگان)</string>
     <string name="tor_chain_profile_name">کوکو → تور</string>
 
@@ -180,6 +176,7 @@
     <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
     <string name="about_changes">تغییرات اخیر</string>
     <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_167">1.6.7 — تفکیک اتری، دقیقاً همان‌طور که کشیدید: صفحهٔ اتصال حالا دو انتخاب مستقل دارد — پروتکل (بدون پروتکل / سایفون / تور) و شبکه (مستقیم / هوشمند / وارپ-ماسک / وارپ-وایرگارد). سایفون و تور اول «مستقیم» امتحان می‌شوند — مستقیم از اپراتور شما، همان معماری اتر و مسیر سریع اثبات‌شدهٔ خودتان — به‌جای سوزاندن دقیقه‌ها روی مسیر زنجیرهٔ WARP که زیرلایهٔ وایرگاردش را اپراتورتان قطع می‌کند و زیرلایهٔ ماسکش هسته را بی‌صدا می‌گذارد. هستهٔ سایفون بی‌صدا (۷۵ ثانیه بدون هیچ خبر شبکه) حالا سریع رد می‌شود به‌جای انتظار تا سقف ۴ دقیقه‌ای. فهرست روش قدیمی و انتخابگر سیم زیرلایه حذف شدند؛ انتخاب‌های قبلی خودکار منتقل می‌شوند</string>
     <string name="about_change_166">1.6.6 — رفع مرگ آنی زیرلایهٔ WireGuard که لاگ 1.6.5 نشان داد: موتور سایدکار معمولاً نخستین کاربر libbox در سشن است و فایل کشش روی ریشهٔ فقط‌خواندنی می‌افتاد («initialize cache-file: open cache.db: read-only file system») — همان آماده‌سازی محیطی که همیشه پیش از هستهٔ اصلی انجام می‌شد حالا پیش از سایدکار هم اجرا می‌شود (در سندباکس روی خودِ libbox هر دو طرف اثبات شد). حالت «فقط WireGuard» دیگر در شکست بی‌صدا سیم را عوض نمی‌کند، و موتور MASQUE گرم با خروجی مرده با یک درخواست واقعی probe و در چند ثانیه با خطای صادقانه کنار گذاشته می‌شود به‌جای هنگِ چنددقیقه‌ای</string>
     <string name="about_change_165">1.6.5 — همان دو‌بخشی که از Aether نشان دادی: حالت‌های زنجیره‌ای (Kuku → Psiphon / Kuku → Tor) حالا پیش‌فرض روی زیرلایهٔ واقعی WireGuard می‌روند (یک موتور دوم بدون TUN روی هویت WireGuard ثبت‌شدهٔ WARP تو — همان سیمی که Aether استفاده می‌کند) با موتور MASQUE به‌عنوان جایگزین، و یک انتخابگر «سیم زیرلایه» هم در صفحهٔ اتصال اضافه شد (خودکار / فقط WireGuard / فقط MASQUE)</string>
     <string name="about_change_164">1.6.4 — سایفون اول مسیر زنجیره‌ای از روی WARP را امتحان می‌کند (همان معماری‌ای که با Aether روی اینترنت خودت جواب داد)، کشور خروجیِ ناکام یک بار خودکار روی خروجی آزاد تلاش می‌کند و پیشرفت اتصال زنده نمایش داده می‌شود: رسیدن به API · فهرست سرورها · باز شدن تونل · کشور خروجی</string>

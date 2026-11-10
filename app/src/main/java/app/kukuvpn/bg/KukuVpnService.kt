@@ -194,10 +194,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
         stopping.set(false)
         settings = settingsStore.snapshot()
-        // v1.3.0 Connection page: user-pinned method + scan mode.
+        // v1.6.7 Aether split: the two independent Connection-page pins.
         val protocol = settings.protocol
-        ServiceBridge.log("INFO", "method: $protocol · scan mode: ${settings.scanMode}")
-        if (protocol == FallbackEngine.PROTOCOL_GOOL) {
+        val network = settings.network
+        ServiceBridge.log("INFO", "protocol: $protocol · network: $network · scan mode: ${settings.scanMode}")
+        if (protocol == FallbackEngine.PROTO_NONE && network == FallbackEngine.NET_GOOL) {
             // lazily register the SECOND WARP identity used as the inner hop;
             // on failure the chain falls back to the ranked smart candidates
             try {
@@ -211,7 +212,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         // failure must FAIL the connect with the real error — falling through
         // to the WARP chain here is exactly the silent substitution the user
         // ordered removed.
-        if (protocol == FallbackEngine.PROTOCOL_PSIPHON || protocol == FallbackEngine.PROTOCOL_KUKU_PSIPHON) {
+        if (protocol == FallbackEngine.PROTO_PSIPHON) {
             try {
                 PsiphonEngine.ensureProfiles(this)
             } catch (e: Exception) {
@@ -221,7 +222,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
         // v1.6.0 Tor backends: lazily register the bundled-Tor candidates
         // (standalone + Kuku→Tor) — same exclusive failure rule (v1.6.1)
-        if (protocol == FallbackEngine.PROTOCOL_TOR || protocol == FallbackEngine.PROTOCOL_KUKU_TOR) {
+        if (protocol == FallbackEngine.PROTO_TOR) {
             try {
                 TorEngine.ensureProfiles(this)
             } catch (e: Exception) {
@@ -237,9 +238,8 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         // v1.6.1: psiphon/tor pins are EXCLUSIVE (FallbackEngine returns only
         // that family) — a WARP candidate can no longer follow a pinned
         // Psiphon/Tor, so a failed pin now ends in an honest ERROR state with
-        // the real failure reason instead of a WARP substitution. The old
-        // fallback-warning banner path is gone with the behaviour.
-        var chain = buildChain(protocol)
+        // the real failure reason instead of a WARP substitution.
+        var chain = buildChain()
         // stealth scan mode: no raw-UDP wire format at all — drop the plain
         // WireGuard WARP candidates (their handshake is bare UDP on the wire);
         // MASQUE (TCP-443 capable) and gool (WG-over-MASQUE) stay. Never let
@@ -337,14 +337,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             }
             // v1.5.0 Psiphon candidates boot the bundled Psiphon core (child
             // process, SOCKS on 127.0.0.1:1087). The chained variant rides an
-            // underlay — v1.6.5: the WIRE is the user's choice (WireGuard
-            // sidecar first, MASQUE engine fallback) — see bootChainedUnderlay.
+            // underlay — v1.6.7: the WIRE is the NETWORK pin (direct/masque/wg
+            // or smart) — see bootChainedUnderlay.
             val isPsiphon = candidate.fromSubscription == PsiphonEngine.SOURCE
             if (isPsiphon) {
                 val chained = candidate.transport == PsiphonEngine.TRANSPORT_CHAINED
                 var underlayPort: Int? = null
                 if (chained) try {
-                    underlayPort = bootChainedUnderlay("Kuku→Psiphon")
+                    underlayPort = bootChainedUnderlay("Kuku→Psiphon", underlayWire())
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
@@ -386,13 +386,13 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             }
             // v1.6.0 Tor candidates boot the bundled tor core (child process
             // via the libtorrun shim, SOCKS on 127.0.0.1:1089). The chained
-            // variant rides the v1.6.5 selectable underlay (torrc Socks5Proxy).
+            // variant rides the v1.6.7 NETWORK-pin underlay (torrc Socks5Proxy).
             val isTor = candidate.fromSubscription == TorEngine.SOURCE
             if (isTor) {
                 val chained = candidate.transport == TorEngine.TRANSPORT_CHAINED
                 var underlayPort: Int? = null
                 if (chained) try {
-                    underlayPort = bootChainedUnderlay("Kuku→Tor")
+                    underlayPort = bootChainedUnderlay("Kuku→Tor", underlayWire())
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
@@ -538,23 +538,27 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
     }
 
-    private suspend fun buildChain(protocol: String): List<Profile> {
+    private suspend fun buildChain(): List<Profile> {
         val selectedId = profileStore.selectedId.first()
         // v1.2.4: the auto-managed WARP family is ONE method with several
         // transports — always rank it (H2/TCP first, then H3/UDP, then the WG
         // ports), even when autoFallback is off: picking "Cloudflare WARP
         // (Free)" selects the method, not a specific UDP-vs-TCP wire format.
         // User-imported profiles keep strict autoFallback semantics.
-        // v1.3.0: a pinned protocol (masque/wg/gool) bypasses autoFallback —
-        // the user explicitly chose what to try first; the smart chain still
-        // rides behind it as the safety net (see FallbackEngine).
+        // v1.6.7: the two-dimension pins (protocol × network) drive the chain;
+        // a pinned network (masque/wg/gool) bypasses autoFallback — the user
+        // explicitly chose what to try first; the smart chain still rides
+        // behind it as the safety net (see FallbackEngine).
         val selectedIsWarp = profileStore.snapshot()
             .firstOrNull { it.id == selectedId }
             ?.fromSubscription in setOf(WarpRegistrar.WARP_SOURCE, WarpRegistrar.WARP_GOOL_SOURCE)
-        return if (protocol != FallbackEngine.PROTOCOL_SMART || settings.autoFallback || selectedIsWarp) {
+        return if (settings.protocol != FallbackEngine.PROTO_NONE ||
+            settings.network != FallbackEngine.NET_SMART || settings.autoFallback || selectedIsWarp
+        ) {
             FallbackEngine(profileStore).chain(
                 selectedId,
-                protocol = protocol,
+                protocol = settings.protocol,
+                network = settings.network,
                 networkClass = currentNetworkClass(),
                 maxCandidates = MAX_CANDIDATES,
             )
@@ -640,17 +644,22 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
     }
 
     /**
-     * v1.6.5 — the chained candidates' underlay, with the WIRE as its own
-     * choice (the Aether split the user drew: "Network backend" ≠ "Protocol"):
+     * v1.6.7 — the chained candidates' underlay wire, straight from the
+     * NETWORK pin (the Aether split the user drew: "Network" ≠ "Protocol"):
      *  - "wg"     → the REAL WireGuard sidecar only — a failure fails HONESTLY,
      *    it never switches wires behind the user's back;
      *  - "masque" → the MASQUE engine only (the pre-1.6.5 behavior);
-     *  - "smart"  → WireGuard sidecar FIRST (the user's device proves that
-     *    wire connects the chain on their ISP via Aether), MASQUE fallback.
+     *  - "smart"  → WireGuard sidecar FIRST, MASQUE fallback.
      * Returns the underlay SOCKS port the child core must use as upstream
      * (2086 sidecar / 2085 MASQUE engine).
      */
-    private suspend fun bootChainedUnderlay(label: String): Int {
+    private fun underlayWire(): String = when (settings.network) {
+        FallbackEngine.NET_WG -> "wg"
+        FallbackEngine.NET_MASQUE -> "masque"
+        else -> "smart" // NET_SMART — and the defensive default
+    }
+
+    private suspend fun bootChainedUnderlay(label: String, wire: String): Int {
         // v1.6.6 FIX (the 1.6.5 field report): the sidecar is usually the
         // FIRST libbox user in a session. Without Setup, libbox's package-level
         // working path is empty and its always-on cache-file service opens
@@ -662,7 +671,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         // open cache.db: permission denied"; with Setup (this exact recipe) →
         // clean start + cache.db lands inside WorkingPath.
         ensureLibbox()
-        val wire = settings.underlayWire
         if (wire != "masque") {
             val wgCandidates = FallbackEngine.wireguardUnderlayCandidates(profileStore)
             if (WgSidecar.isRunning) return WgSidecar.SOCKS_PORT

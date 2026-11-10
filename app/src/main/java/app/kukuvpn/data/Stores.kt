@@ -160,19 +160,21 @@ data class AppSettings(
     val autoFallback: Boolean = true,
     val subAutoUpdate: Boolean = true,
     val vpnMode: Boolean = true,    // true full-device VPN, false local proxy only
-    // v1.3.0 Connection page (Aether-style method selector):
-    // "smart" (engine races TCP-443 + UDP-443 and the chain ranks everything)
-    // "masque" (WARP over MASQUE only) · "wg" (plain WireGuard only)
-    // "gool" (WARP×2, second tunnel inside the first — experimental)
-    val protocol: String = "smart",
+    // v1.6.7 — the Aether split the user drew on the Connection page: TWO
+    // independent selectors instead of one mixed list.
+    //   protocol (پروتکل): "none" (plain VPN, no protocol core)
+    //                    | "psiphon" (bundled Psiphon core)
+    //                    | "tor"    (bundled tor core)
+    //   network  (شبکه):   "direct" (the protocol reaches the network straight
+    //                    from the ISP — Aether's own default and the user's
+    //                    PROVEN fast path) | "smart" (WARP underlay, auto wire)
+    //                    | "masque" | "wg" | "gool" (plain-VPN wires)
+    // Migration from the pre-1.6.7 mixed single selector lives in SettingsStore.
+    val protocol: String = "none",
+    val network: String = "smart",
     // v1.3.0 Scan mode: "turbo" | "balanced" | "thorough" | "stealth" | "ironclad"
     // (stealth = no UDP at all — only MASQUE over plain TCP 443)
     val scanMode: String = "balanced",
-    // v1.6.5 Underlay wire for the CHAINED candidates (Kuku → Psiphon / Kuku →
-    // Tor): "smart" = WireGuard sidecar first, MASQUE engine fallback (the
-    // user's Aether test proves the WG wire connects on hostile ISPs);
-    // "wg" = WireGuard sidecar only; "masque" = MASQUE engine only.
-    val underlayWire: String = "smart",
     // v1.6.0 Psiphon exit country (ISO 3166-1 alpha-2) — "auto" = let the
     // core pick the best server anywhere (the core's own default)
     val psiphonRegion: String = "auto",
@@ -193,9 +195,12 @@ private object SettingsKeys {
     val AUTO_FALLBACK = stringPreferencesKey("auto_fallback")
     val SUB_AUTO_UPDATE = stringPreferencesKey("sub_auto_update")
     val VPN_MODE = stringPreferencesKey("vpn_mode")
-    val PROTOCOL = stringPreferencesKey("protocol")
+    // v1.6.7: the new two-dimension keys. The legacy "protocol" key (the old
+    // mixed selector) stays ONLY as the migration source — never written again.
+    val PROTO = stringPreferencesKey("proto_v2")
+    val NETWORK = stringPreferencesKey("network")
+    val PROTOCOL_LEGACY = stringPreferencesKey("protocol")
     val SCAN_MODE = stringPreferencesKey("scan_mode")
-    val UNDERLAY_WIRE = stringPreferencesKey("underlay_wire")
     val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
     val TOR_BRIDGE_MODE = stringPreferencesKey("tor_bridge_mode")
     val TOR_CUSTOM_BRIDGES = stringPreferencesKey("tor_custom_bridges")
@@ -213,9 +218,23 @@ class SettingsStore(private val context: Context) {
             autoFallback = p[SettingsKeys.AUTO_FALLBACK]?.toBooleanStrictOrNull() ?: true,
             subAutoUpdate = p[SettingsKeys.SUB_AUTO_UPDATE]?.toBooleanStrictOrNull() ?: true,
             vpnMode = p[SettingsKeys.VPN_MODE]?.toBooleanStrictOrNull() ?: true,
-            protocol = p[SettingsKeys.PROTOCOL] ?: "smart",
+            // v1.6.7 migration: installs coming from the pre-1.6.7 single mixed
+            // selector keep their intent — psiphon/tor pins land on DIRECT (the
+            // user's proven Aether path; the old "kuku-*" chains land on smart),
+            // plain-WARP pins keep their exact wire.
+            protocol = p[SettingsKeys.PROTO] ?: when (p[SettingsKeys.PROTOCOL_LEGACY]) {
+                "psiphon", "kuku-psiphon" -> "psiphon"
+                "tor", "kuku-tor" -> "tor"
+                else -> "none"
+            },
+            network = p[SettingsKeys.NETWORK] ?: when (p[SettingsKeys.PROTOCOL_LEGACY]) {
+                "masque" -> "masque"
+                "wg" -> "wg"
+                "gool" -> "gool"
+                "psiphon", "tor" -> "direct"
+                else -> "smart"
+            },
             scanMode = p[SettingsKeys.SCAN_MODE] ?: "balanced",
-            underlayWire = p[SettingsKeys.UNDERLAY_WIRE] ?: "smart",
             psiphonRegion = p[SettingsKeys.PSIPHON_REGION] ?: "auto",
             torBridgeMode = p[SettingsKeys.TOR_BRIDGE_MODE] ?: "auto",
             torCustomBridges = p[SettingsKeys.TOR_CUSTOM_BRIDGES] ?: "",
@@ -232,9 +251,9 @@ class SettingsStore(private val context: Context) {
     suspend fun setAutoFallback(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.AUTO_FALLBACK] = v.toString() }
     suspend fun setSubAutoUpdate(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.SUB_AUTO_UPDATE] = v.toString() }
     suspend fun setVpnMode(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.VPN_MODE] = v.toString() }
-    suspend fun setProtocol(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PROTOCOL] = v }
+    suspend fun setProtocol(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PROTO] = v }
+    suspend fun setNetwork(v: String) = context.settingsDataStore.edit { it[SettingsKeys.NETWORK] = v }
     suspend fun setScanMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.SCAN_MODE] = v }
-    suspend fun setUnderlayWire(v: String) = context.settingsDataStore.edit { it[SettingsKeys.UNDERLAY_WIRE] = v }
     suspend fun setPsiphonRegion(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PSIPHON_REGION] = v }
     suspend fun setTorBridgeMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_BRIDGE_MODE] = v }
     suspend fun setTorCustomBridges(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_CUSTOM_BRIDGES] = v }

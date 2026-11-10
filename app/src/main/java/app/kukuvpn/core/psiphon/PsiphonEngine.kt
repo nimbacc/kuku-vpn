@@ -107,6 +107,20 @@ object PsiphonEngine {
     private const val BOOT_CAP_MS = 240_000L
     private const val TICK_MS = 5_000L
 
+    /**
+     * v1.6.7 — the no-progress watchdog. The 1.6.4–1.6.6 field logs show the
+     * killer pattern: a chained candidate whose underlay cannot actually
+     * reach the Psiphon network keeps the core alive but SILENT — zero JSON
+     * notices for the full 240s cap, with the user staring at a ticking
+     * clock. Sandbox-proven baseline (the same binary + config): a core with
+     * a working route prints its first notices within seconds. So: no
+     * notice AT ALL within 75s = the route is dead — fail the attempt and
+     * let the chain move on (direct-first since v1.6.7, so the next attempt
+     * is usually the one that works). An attempt that IS printing notices
+     * keeps the full 240s cap (legit slow link-selection on hostile ISPs).
+     */
+    private const val SILENT_CAP_MS = 75_000L
+
     // public Psiphon bootstrap values (server-list distribution)
     private const val PROPAGATION = "FFFFFFFFFFFFFFFF"
     private const val SPONSOR = "FFFFFFFFFFFFFFFF"
@@ -329,6 +343,22 @@ object PsiphonEngine {
                         throw IllegalStateException(
                             "psiphon boot timeout (${BOOT_CAP_MS / 1000}s)" +
                                 (lastExitRegion.takeIf { it.isNotBlank() }?.let { " — last region: $it" } ?: "") +
+                                tailQuote(2)
+                        )
+                    }
+                    // v1.6.7 silent cap: lastProgress is set ONLY by notices
+                    // that require real network I/O (the API round-trip —
+                    // ApplicationParameters / ClientRegion / ServerTimestamp /
+                    // server list / region / Tunnels). The startup notices
+                    // (NetworkID, ListeningSocksProxyPort…) are local and never
+                    // counted, so a core with a dead route stays "blank" here.
+                    // Sandbox baseline: a working route prints the first such
+                    // notice within ~5s; 75s of total silence = the route is
+                    // dead — fail the attempt NOW instead of ticking to 240s.
+                    if (lastProgress.isBlank() && now - startedAt > SILENT_CAP_MS) {
+                        throw IllegalStateException(
+                            "psiphon core shows no sign of life (no network notices in " +
+                                "${SILENT_CAP_MS / 1000}s — its route cannot reach the Psiphon network)" +
                                 tailQuote(2)
                         )
                     }

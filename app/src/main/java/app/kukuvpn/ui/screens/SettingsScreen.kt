@@ -65,7 +65,7 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(R.string.conn_title), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        protocolSummary(settings.protocol),
+                        protocolSummary(settings.protocol, settings.network),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -220,16 +220,27 @@ private fun SectionCard(content: @Composable () -> Unit) {
     Card { content() }
 }
 
-/** One-line summary under the Connection entry — the current method. */
+/** One-line summary under the Connection entry — the v1.6.7 protocol × network pins. */
 @Composable
-private fun protocolSummary(protocol: String): String = when (protocol) {
-    "masque" -> stringResource(R.string.conn_masque)
-    "wg" -> stringResource(R.string.conn_wg)
-    "gool" -> stringResource(R.string.conn_gool)
-    "psiphon" -> stringResource(R.string.conn_psiphon)
-    "kuku-psiphon" -> stringResource(R.string.conn_kuku_psiphon)
-    else -> stringResource(R.string.conn_smart)
-}
+private fun protocolSummary(protocol: String, network: String): String =
+    stringResource(R.string.settings_conn_summary,
+        stringResource(
+            when (protocol) {
+                "psiphon" -> R.string.proto_psiphon
+                "tor" -> R.string.proto_tor
+                else -> R.string.proto_none
+            }
+        ),
+        stringResource(
+            when (network) {
+                "direct" -> R.string.net_direct
+                "masque" -> R.string.net_masque
+                "wg" -> R.string.net_wg
+                "gool" -> R.string.net_gool
+                else -> R.string.net_smart
+            }
+        ),
+    )
 
 @Composable
 private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {

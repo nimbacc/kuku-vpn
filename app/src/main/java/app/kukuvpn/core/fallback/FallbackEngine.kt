@@ -8,37 +8,35 @@ import kotlinx.coroutines.flow.first
  * Builds the ranked chain of profiles to try when the selected one cannot
  * prove a real connection (RIX-style smart fallback).
  *
- * v1.3.0 — protocol-aware (the Aether-style Connection page):
+ * v1.6.7 — the Aether split (the user drew it on the Connection page):
+ * PROTOCOL and NETWORK are two independent choices, freely combinable:
  *
- *   smart (default) — the full ranked chain:
- *     1. MASQUE H2  (WARP over HTTP/2, TCP 443)   — survives full UDP filters
- *     2. MASQUE H3  (WARP over HTTP/3, UDP 443)
- *     3. plain WireGuard WARP ports
- *     4. everything else (user-imported servers, newest first)
+ *   protocol = none    → the WARP chain (network decides the wire):
+ *     smart (default) — the full ranked chain:
+ *       1. MASQUE H2  (WARP over HTTP/2, TCP 443)   — survives full UDP filters
+ *       2. MASQUE H3  (WARP over HTTP/3, UDP 443)
+ *       3. plain WireGuard WARP ports
+ *     masque — the MASQUE pair first, then the smart chain as a safety net
+ *     wg     — the plain WireGuard WARP ports first, then the smart chain
+ *     gool   — the WARP×2 inner-tunnel profile first, then the smart chain
  *
- *   masque — the MASQUE pair first, then the smart chain as a safety net
- *   wg     — the plain WireGuard WARP ports first, then the smart chain
- *   gool   — the WARP×2 inner-tunnel profile first, then the smart chain
- *   psiphon / kuku-psiphon — ONLY the bundled Psiphon core (v1.6.1)
- *   tor / kuku-tor         — ONLY the bundled Tor core (v1.6.1)
- *
- * v1.6.1 — Psiphon and Tor are EXCLUSIVE methods, per the user's explicit
- * request ("اینکه خودکار برگرده رو وارپ رو هم حذف کن" — remove the automatic
- * return to WARP). A pinned psiphon/tor method — or a manually selected
- * psiphon/tor profile in the Profiles list — must NEVER end up carrying
- * traffic over WARP: when the pinned family fails, the connect FAILS with
- * the real error instead of quietly substituting a different exit. The same
- * rule holds when the user picked the psiphon/tor profile from the Profiles
- * list (protocol stays "smart" there) — the selection decides the family,
- * not just what is tried first. Only the WARP-family pins (masque/wg/gool)
- * keep the smart chain behind them, because every candidate in that chain
- * is a WARP exit — no exit substitution can happen.
+ *   protocol = psiphon / tor → ONLY that bundled core (v1.6.1 exclusivity —
+ *     a failed Psiphon/Tor connect surfaces its real error, never a WARP
+ *     substitution), and the NETWORK pin decides how the core reaches out:
+ *     direct — the core connects STRAIGHT from the ISP. This is Aether's own
+ *       architecture and the user's PROVEN fast path ("Aether connects in
+ *       seconds on my ISP"); since v1.6.7 it is the FIRST thing tried — the
+ *       v1.6.4–v1.6.6 era put the WARP-chained candidate first and the field
+ *       logs show exactly how that burns: WG underlay reset by the ISP,
+ *       MASQUE underlay alive but Psiphon silent for minutes.
+ *     masque / wg — the core rides ONLY that WARP underlay wire (chained).
+ *     smart — direct FIRST (Aether mode), then the WARP-chained candidate
+ *       as the safety net for networks where the protocol itself is filtered.
  *
  * Per-network memory (the Aether "remembers which one worked on this
  * network" rule): when the store holds a profile that last VERIFIED on the
- * current network class (wifi vs cellular), it leads the chain regardless of
- * the transport heuristics — a profile proven on THIS network is a stronger
- * signal than any rule.
+ * current network class (wifi vs cellular), it leads the WARP chain regardless
+ * of the transport heuristics.
  */
 class FallbackEngine(private val store: ProfileStore) {
 
@@ -84,58 +82,62 @@ class FallbackEngine(private val store: ProfileStore) {
 
     suspend fun chain(
         selectedId: String?,
-        protocol: String = PROTOCOL_SMART,
+        protocol: String,
+        network: String,
         networkClass: String = "",
         failedIds: Set<String> = emptySet(),
         maxCandidates: Int = 8,
     ): List<Profile> {
         val all = store.snapshot()
         if (all.isEmpty()) return emptyList()
-        val byId = all.associateBy { it.id }
+
+        // v1.6.7 — the bundled protocol cores: the PROTOCOL pin decides the
+        // family, the NETWORK pin decides the underlay. Exclusive by
+        // construction (v1.6.1): no WARP candidate can follow a failed
+        // Psiphon/Tor, and no Psiphon/Tor candidate can hijack a plain-VPN
+        // connect. DIRECT (Aether's architecture, the user's proven fast
+        // path) leads every smart ordering.
+        when (protocol) {
+            PROTO_PSIPHON -> {
+                val standalone = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_TRANSPORT }
+                val chained = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
+                val ordered = when (network) {
+                    NET_DIRECT -> standalone
+                    NET_MASQUE, NET_WG -> chained
+                    else -> standalone + chained // smart: direct first, then the WARP chain
+                }
+                return ordered.filterNot { it.id in failedIds }.take(maxCandidates)
+            }
+            PROTO_TOR -> {
+                val standalone = all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_TRANSPORT }
+                val chained = all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_CHAIN_TRANSPORT }
+                val ordered = when (network) {
+                    NET_DIRECT -> standalone
+                    NET_MASQUE, NET_WG -> chained
+                    else -> standalone + chained // smart: direct first, then the WARP chain
+                }
+                return ordered.filterNot { it.id in failedIds }.take(maxCandidates)
+            }
+        }
+
+        // protocol = none: the plain-VPN WARP chain. The psiphon/tor profiles
+        // are structurally OUT of this pool — "no protocol" can never end on a
+        // protocol-core exit (the v1.6.1 honesty rule, now in the model itself).
+        val goolProfiles = all.filter { isGool(it) }
+        val pool = all.filterNot {
+            isGool(it) || it.fromSubscription == PSIPHON_SOURCE || it.fromSubscription == TOR_SOURCE
+        }
+        if (pool.isEmpty()) return emptyList()
+        val byId = pool.associateBy { it.id }
         val selected = selectedId?.let { byId[it] }
         val lastGood = store.lastGoodId.first()?.let { byId[it] }
 
-        // v1.6.1 — Psiphon/Tor are exclusive: when the pinned METHOD (or the
-        // selected PROFILE, however the user picked it) belongs to the
-        // psiphon/tor family, the chain is that family ONLY. No WARP safety
-        // net — a failed Psiphon/Tor connect must surface its real error,
-        // never quietly ride a different exit.
-        val exclusiveFamily = when {
-            protocol == PROTOCOL_PSIPHON || protocol == PROTOCOL_KUKU_PSIPHON -> PSIPHON_SOURCE
-            protocol == PROTOCOL_TOR || protocol == PROTOCOL_KUKU_TOR -> TOR_SOURCE
-            selected?.fromSubscription == PSIPHON_SOURCE -> PSIPHON_SOURCE
-            selected?.fromSubscription == TOR_SOURCE -> TOR_SOURCE
-            else -> null
-        }
-        if (exclusiveFamily != null) {
-            val family = all
-                .filter { it.fromSubscription == exclusiveFamily }
-                .filterNot { it.id in failedIds }
-            // v1.6.4: within the Psiphon family, the WARP-chained candidate
-            // goes FIRST — the user's own device proves that architecture
-            // connects fast on Iranian ISPs (Aether's "Aether → Psiphon"),
-            // while direct Psiphon fronting can burn the whole boot cap.
-            // Tor keeps its store order: direct Tor is the user-verified path.
-            val ordered = if (exclusiveFamily == PSIPHON_SOURCE) {
-                family.sortedBy { if (it.transport == PSIPHON_TRANSPORT) 1 else 0 }
-            } else {
-                family
-            }
-            return ordered.take(maxCandidates)
-        }
-
-        // gool profiles only ever appear when the user pinned the gool method
-        val goolProfiles = all.filter { isGool(it) }
-        val pool = all.filterNot { isGool(it) }
-
-        val pinned: List<Profile> = when (protocol) {
-            PROTOCOL_MASQUE -> pool.filter { isWarp(it) && isMasque(it) }
-            PROTOCOL_WG -> pool.filter { isWarp(it) && !isMasque(it) }
-            PROTOCOL_GOOL -> goolProfiles
-            PROTOCOL_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_TRANSPORT }
-            PROTOCOL_KUKU_PSIPHON -> all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
-            PROTOCOL_TOR -> all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_TRANSPORT }
-            PROTOCOL_KUKU_TOR -> all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_CHAIN_TRANSPORT }
+        val pinned: List<Profile> = when (network) {
+            NET_MASQUE -> pool.filter { isWarp(it) && isMasque(it) }
+            NET_WG -> pool.filter { isWarp(it) && !isMasque(it) }
+            NET_GOOL -> goolProfiles
+            // smart (and a defensive direct→smart coercion — the UI never
+            // offers Direct without a protocol core)
             else -> emptyList()
         }
 
@@ -170,8 +172,10 @@ class FallbackEngine(private val store: ProfileStore) {
          * v1.6.5 — ranked WireGuard-family candidates for the chained
          * UNDERLAY sidecar (WgSidecar): real WARP WireGuard registrations
          * only (no MASQUE-engine profiles, no gool doubles), lastGood first.
-         * The user's device proved via Aether that a WireGuard underlay is
-         * what connects the Kuku→Psiphon chain on hostile ISPs.
+         * v1.6.7 field note: on the user's ISP the WireGuard wire gets reset
+         * by the censor, so the sidecar is an explicit NETWORK=wg choice or
+         * a smart-mode fallback leg — never the golden path (that is the
+         * DIRECT protocol route now).
          */
         suspend fun wireguardUnderlayCandidates(store: ProfileStore, max: Int = 2): List<Profile> {
             val lastGood = runCatching { store.lastGoodId.first() }.getOrNull()
@@ -191,15 +195,17 @@ class FallbackEngine(private val store: ProfileStore) {
         private const val TRANSPORT_MASQUE_H2 = "masque-h2"
         private const val TRANSPORT_GOOL_WG = "gool"
 
-        // protocol selector values (AppSettings.protocol)
-        const val PROTOCOL_SMART = "smart"
-        const val PROTOCOL_MASQUE = "masque"
-        const val PROTOCOL_WG = "wg"
-        const val PROTOCOL_GOOL = "gool"
-        const val PROTOCOL_PSIPHON = "psiphon"
-        const val PROTOCOL_KUKU_PSIPHON = "kuku-psiphon"
-        const val PROTOCOL_TOR = "tor"
-        const val PROTOCOL_KUKU_TOR = "kuku-tor"
+        // v1.6.7 protocol dimension values (AppSettings.protocol)
+        const val PROTO_NONE = "none"
+        const val PROTO_PSIPHON = "psiphon"
+        const val PROTO_TOR = "tor"
+
+        // v1.6.7 network dimension values (AppSettings.network)
+        const val NET_SMART = "smart"
+        const val NET_MASQUE = "masque"
+        const val NET_WG = "wg"
+        const val NET_GOOL = "gool"
+        const val NET_DIRECT = "direct"
 
         // Psiphon backend markers (v1.5.0) — literals mirror PsiphonEngine
         private const val PSIPHON_SOURCE = "psiphon"
