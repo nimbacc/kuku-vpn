@@ -174,7 +174,7 @@
     <string name="about_github_hint">Source code, issues and new releases</string>
     <string name="about_changes">Recent changes</string>
     <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
-    <string name="about_change_162">1.6.2 — Psiphon crash diagnosis: the core's real output is now shown on failure, stale leftover processes are killed before start, and a clean-data-store retry runs automatically</string>
+    <string name="about_change_162">1.6.2 — Psiphon crash diagnosis: the core\'s real output is now shown on failure, stale leftover processes are killed before start, and a clean-data-store retry runs automatically</string>
     <string name="about_change_161">1.6.1 — No more automatic WARP fallback: when Psiphon or Tor fails (pinned on the Connection page or picked in Profiles), Kuku shows the real error and stays offline instead of quietly connecting through WARP</string>
     <string name="about_change_160">1.6.0 — Real Psiphon (all architectures, exit country picker) and real Tor (fresh obfs4/webtunnel bridges, own-bridge paste) — and the end of silent fallback: a WARP rescue is announced honestly</string>
     <string name="about_change_150">1.5.0 — Psiphon and Kuku → Psiphon: two new serverless methods</string>
