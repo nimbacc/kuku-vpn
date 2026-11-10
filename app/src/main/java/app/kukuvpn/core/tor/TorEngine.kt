@@ -77,6 +77,24 @@ object TorEngine {
     @Volatile private var lastWarning: String? = null
     private val mutex = Mutex()
 
+    // v1.6.2 — ring buffer of the child's raw output (same as PsiphonEngine):
+    // boot failures quote the tail so the real reason is always visible.
+    private val tailLock = Any()
+    private val outputTail = ArrayDeque<String>()
+
+    private fun noteOutput(line: String) {
+        synchronized(tailLock) {
+            outputTail.addLast(line)
+            while (outputTail.size > 40) outputTail.removeFirst()
+        }
+    }
+
+    private fun tailQuote(n: Int = 4): String {
+        val lines = synchronized(tailLock) { outputTail.toList() }
+            .takeLast(n).map { it.trim().take(200) }.filter { it.isNotEmpty() }
+        return if (lines.isEmpty()) "" else " — output: ${lines.joinToString(" | ")}"
+    }
+
     val isRunning: Boolean get() = proc != null
 
     /** Human-readable bootstrap progress for boot-tick log lines. */
@@ -106,6 +124,15 @@ object TorEngine {
         }
         if (!tor.exists()) {
             return@withLock Result.failure(IllegalStateException("$TOR_BINARY missing from APK"))
+        }
+
+        // v1.6.2: stale orphaned tor/PT processes (app swept, children lived
+        // on) hold the SOCKS port — kill same-UID leftovers before starting.
+        val killed = app.kukuvpn.core.psiphon.PsiphonEngine.killStaleProcesses(
+            listOf(RUNNER_BINARY, TOR_BINARY, LYREBIRD_BINARY, WEBTUNNEL_BINARY)
+        )
+        if (killed > 0) {
+            ServiceBridge.log("WARN", "tor: killed $killed stale process(es) from an earlier session")
         }
 
         val dir = File(context.filesDir, "tor").apply { mkdirs() }
@@ -147,6 +174,7 @@ object TorEngine {
         tunnelUp = false
         lastProgress = 0
         lastWarning = null
+        outputTail.clear()
 
         // stdout/stderr pump: captures pre-log-file fatal errors (bad torrc,
         // missing binary permissions) — Bootstrapped progress comes from the
@@ -155,6 +183,7 @@ object TorEngine {
             try {
                 started.inputStream.bufferedReader().useLines { lines ->
                     for (line in lines) {
+                        noteOutput(line)
                         if (line.contains("[warn]", true) || line.contains("[err]", true) ||
                             line.contains("Failed", true)
                         ) {
@@ -176,7 +205,7 @@ object TorEngine {
                 if (proc == null || !started.isAlive) {
                     throw IllegalStateException(
                         "tor exited early (progress $lastProgress%)" +
-                            (lastWarning?.let { ": $it" } ?: "")
+                            (lastWarning?.let { ": $it" } ?: "") + tailQuote()
                     )
                 }
                 // tail the tor log for Bootstrap progress + warnings
@@ -200,7 +229,7 @@ object TorEngine {
                 if (now > deadline) {
                     throw IllegalStateException(
                         "tor bootstrap timeout (${BOOT_CAP_MS / 1000}s, stuck at $lastProgress%)" +
-                            (lastWarning?.let { " — $it" } ?: "")
+                            (lastWarning?.let { " — $it" } ?: "") + tailQuote(2)
                     )
                 }
                 if (now - lastTick >= TICK_MS) {

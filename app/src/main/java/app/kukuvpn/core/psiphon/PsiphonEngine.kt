@@ -23,6 +23,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.util.Base64
 
 /**
@@ -47,6 +49,20 @@ import java.util.Base64
  * The chained variant (Kuku → Psiphon) reaches the Psiphon network THROUGH
  * the WARP engine's SOCKS underlay (UpstreamProxyURL) — for networks where
  * Psiphon's own fronting is blocked but WARP gets out.
+ *
+ * v1.6.2 — "psiphon core exited early" diagnostics (the user's device died
+ * instantly while the same binary+config ran fine in the sandbox, and the
+ * old pump DISCARDED every non-JSON line, hiding the cause):
+ *  - every output line of the child (JSON notice or Go log/panic) lands in a
+ *    ring buffer; boot failures carry the tail so the REAL reason is visible
+ *    on the Home card and in the Logs page;
+ *  - stale orphaned cores from a previous session (Android does not kill
+ *    child processes when the app is swept) are SIGKILLed before boot — an
+ *    orphan holding the SOCKS port makes every fresh core die at bind;
+ *  - the SOCKS/HTTP ports are probed before start: occupied → explicit
+ *    error naming the port, never a mystery exit;
+ *  - one automatic retry with a CLEAN data store when the core dies at
+ *    startup twice in a row (stale bolt/ledger locks after a hard kill).
  */
 object PsiphonEngine {
 
@@ -89,6 +105,29 @@ object PsiphonEngine {
     @Volatile private var lastExitRegion: String = ""
     private val mutex = Mutex()
 
+    // v1.6.2 — ring buffer of the child's RAW output (every line: JSON notices,
+    // Go logs, panics). Boot failures quote the tail so the real reason is
+    // never hidden again.
+    private val tailLock = Any()
+    private val outputTail = ArrayDeque<String>()
+
+    private fun noteOutput(line: String) {
+        synchronized(tailLock) {
+            outputTail.addLast(line)
+            while (outputTail.size > 40) outputTail.removeFirst()
+        }
+    }
+
+    private fun tailSnapshot(): List<String> = synchronized(tailLock) { outputTail.toList() }
+
+    /** The last [n] output lines, trimmed — the boot-failure evidence. */
+    private fun tailQuote(n: Int = 4): String {
+        val lines = tailSnapshot().takeLast(n)
+            .map { it.trim().take(200) }
+            .filter { it.isNotEmpty() }
+        return if (lines.isEmpty()) "" else " — output: ${lines.joinToString(" | ")}"
+    }
+
     val isRunning: Boolean get() = proc != null
 
     /** The exit region the core last reported via ConnectedServerRegion. */
@@ -119,28 +158,58 @@ object PsiphonEngine {
                 )
             )
         }
-            val dir = File(context.filesDir, "psiphon").apply { mkdirs() }
-            val dataDir = File(dir, "data").apply { mkdirs() }
-            val cfg = File(dir, "config.json")
-            cfg.writeText(buildConfig(upstream, dataDir.absolutePath, region))
 
+        // v1.6.2: an orphaned core from a previous session (app swept while
+        // the child lived on) holds the SOCKS port forever — every new core
+        // then dies instantly at bind. Kill same-UID stragglers first.
+        val killed = killStaleProcesses(listOf(BINARY))
+        if (killed > 0) {
+            app.kukuvpn.bg.ServiceBridge.log(
+                "WARN", "psiphon: killed $killed stale core process(es) from an earlier session"
+            )
+        }
+        // explicit port probe — a busy port is a NAMED error, not a mystery exit
+        for (port in intArrayOf(SOCKS_PORT, HTTP_PORT)) {
+            if (portBusy(port)) {
+                return@withLock Result.failure(
+                    IllegalStateException(
+                        "psiphon cannot start: TCP port $port is occupied by another process " +
+                            "on this device — reboot the phone or free the port, then retry"
+                    )
+                )
+            }
+        }
+
+        val dir = File(context.filesDir, "psiphon").apply { mkdirs() }
+        val dataDir = File(dir, "data").apply { mkdirs() }
+        val cfg = File(dir, "config.json")
+        cfg.writeText(buildConfig(upstream, dataDir.absolutePath, region))
+
+        var attempt = 0
+        while (true) {
+            attempt++
+            outputTail.clear()
             val started = try {
                 ProcessBuilder(bin.absolutePath, "-config", cfg.absolutePath)
                     .redirectErrorStream(true)
                     .start()
             } catch (e: Exception) {
-                return@withLock Result.failure(e)
+                return@withLock Result.failure(
+                    IllegalStateException("psiphon core failed to start: ${e.message}", e)
+                )
             }
-        proc = started
-        procUpstream = upstream
-        tunnelUp = false
-        lastExitRegion = ""
+            proc = started
+            procUpstream = upstream
+            tunnelUp = false
+            lastExitRegion = ""
 
-            // stdout pump: the console client emits one JSON notice per line
+            // output pump: JSON notices drive the tunnel state; EVERY line
+            // (including Go logs/panics on stderr) lands in the ring buffer
             Thread {
                 try {
                     started.inputStream.bufferedReader().useLines { lines ->
                         for (line in lines) {
+                            noteOutput(line)
                             if (!line.startsWith("{")) continue
                             val obj = runCatching {
                                 Json.parseToJsonElement(line).jsonObject
@@ -181,16 +250,20 @@ object PsiphonEngine {
             val startedAt = SystemClock.elapsedRealtime()
             val deadline = startedAt + BOOT_CAP_MS
             var lastTick = 0L
+            var failure: Exception? = null
             try {
                 while (!tunnelUp) {
                     if (proc == null || !started.isAlive) {
-                        throw IllegalStateException("psiphon core exited early")
+                        throw IllegalStateException(
+                            "psiphon core exited immediately (attempt $attempt)" + tailQuote()
+                        )
                     }
                     val now = SystemClock.elapsedRealtime()
                     if (now > deadline) {
                         throw IllegalStateException(
                             "psiphon boot timeout (${BOOT_CAP_MS / 1000}s)" +
-                                (lastExitRegion.takeIf { it.isNotBlank() }?.let { " — last region: $it" } ?: "")
+                                (lastExitRegion.takeIf { it.isNotBlank() }?.let { " — last region: $it" } ?: "") +
+                                tailQuote(2)
                         )
                     }
                     if (now - lastTick >= TICK_MS) {
@@ -199,15 +272,32 @@ object PsiphonEngine {
                     }
                     delay(500)
                 }
-                Result.success(Unit)
+                return@withLock Result.success(Unit)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 stopInternal()
                 throw e // service teardown must stay a cancellation upstream
             } catch (e: Exception) {
-                stopInternal()
-                Result.failure(e)
+                failure = e
             }
+
+            // v1.6.2: an instant death is very often a stale data store (a
+            // bolt/ledger lock from a hard-killed previous core). Wipe it and
+            // give the core ONE clean retry before reporting failure.
+            val earlyDeath = failure?.message?.contains("exited immediately") == true
+            if (earlyDeath && attempt == 1) {
+                stopInternal()
+                app.kukuvpn.bg.ServiceBridge.log(
+                    "WARN",
+                    "psiphon core died at startup — wiping the data store and retrying once"
+                )
+                dataDir.deleteRecursively()
+                dataDir.mkdirs()
+                continue
+            }
+            stopInternal()
+            return@withLock Result.failure(failure ?: IllegalStateException("psiphon boot failed"))
         }
+    }
 
     fun stop() {
         stopInternal()
@@ -228,6 +318,45 @@ object PsiphonEngine {
                 }
             }.apply { isDaemon = true }.start()
         }
+    }
+
+    /**
+     * v1.6.2 — SIGKILL same-UID leftovers whose /proc cmdline matches any of
+     * [needles]. Android orphans child processes when the app is swept; an
+     * orphaned core keeps the SOCKS port bound and kills every future boot
+     * instantly at bind. Returns how many processes were killed.
+     */
+    internal fun killStaleProcesses(needles: List<String>): Int {
+        val self = android.os.Process.myPid()
+        var killed = 0
+        val procDir = File("/proc")
+        val pids = procDir.listFiles()?.mapNotNull { it.name.toIntOrNull() } ?: return 0
+        for (pid in pids) {
+            if (pid == self) continue
+            val cmd = runCatching {
+                File("/proc/$pid/cmdline").readBytes().toString(Charsets.UTF_8)
+            }.getOrNull() ?: continue
+            if (needles.any { cmd.contains(it) }) {
+                val killedOne = runCatching { android.os.Process.killProcess(pid) }.isSuccess
+                try {
+                    Thread.sleep(150)
+                } catch (_: InterruptedException) {
+                }
+                runCatching { android.os.Process.sendSignal(pid, 9) }
+                if (killedOne) killed++
+            }
+        }
+        return killed
+    }
+
+    /** True when [port] cannot be bound on loopback right now. */
+    private fun portBusy(port: Int): Boolean = try {
+        ServerSocket().use {
+            it.bind(InetSocketAddress("127.0.0.1", port), 1)
+            false
+        }
+    } catch (_: Exception) {
+        true
     }
 
     /**
