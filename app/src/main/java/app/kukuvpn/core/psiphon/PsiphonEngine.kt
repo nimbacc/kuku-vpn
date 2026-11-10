@@ -63,6 +63,17 @@ import java.util.Base64
  *    error naming the port, never a mystery exit;
  *  - one automatic retry with a CLEAN data store when the core dies at
  *    startup twice in a row (stale bolt/ledger locks after a hard kill).
+ *
+ * v1.6.3 — the REAL instant-death cause, found via the v1.6.2 diagnostics:
+ * `failed to create datastore directory: mkdir [redacted]: read-only file
+ * system`. This (2024) core DEPRECATED DataStoreDirectory — persistent files
+ * now live under DataRootDirectory, and when that is unset the core falls
+ * back to os.Getwd(). An Android child process's working directory is "/",
+ * which is a READ-ONLY mount, so the core tried `mkdir /psiphon...` and died
+ * at Config.Commit before touching the network. (The sandbox CI test never
+ * caught it because there the cwd happened to be writable.) Fix: pass
+ * DataRootDirectory = an app-private writable directory; also drop the
+ * deprecated field and probe writability up front with a clear error.
  */
 object PsiphonEngine {
 
@@ -181,9 +192,26 @@ object PsiphonEngine {
         }
 
         val dir = File(context.filesDir, "psiphon").apply { mkdirs() }
-        val dataDir = File(dir, "data").apply { mkdirs() }
+        // v1.6.3: the core's persistent root — it creates its own
+        // "ca.psiphon.PsiphonTunnel.tunnel-core" subdir inside this
+        val dataRoot = File(dir, "root").apply { mkdirs() }
+        // writability probe: fail HERE with a clear message instead of
+        // booting the core just to watch it die at Config.Commit
+        try {
+            File(dataRoot, ".write-probe").writeText("ok").also {
+                File(dataRoot, ".write-probe").delete()
+            }
+        } catch (e: Exception) {
+            return@withLock Result.failure(
+                IllegalStateException(
+                    "psiphon data store is not writable (${dataRoot.absolutePath}): ${e.message} — " +
+                        "free up device storage or reboot the phone, then retry",
+                    e
+                )
+            )
+        }
         val cfg = File(dir, "config.json")
-        cfg.writeText(buildConfig(upstream, dataDir.absolutePath, region))
+        cfg.writeText(buildConfig(upstream, dataRoot.absolutePath, region))
 
         var attempt = 0
         while (true) {
@@ -290,8 +318,8 @@ object PsiphonEngine {
                     "WARN",
                     "psiphon core died at startup — wiping the data store and retrying once"
                 )
-                dataDir.deleteRecursively()
-                dataDir.mkdirs()
+                dataRoot.deleteRecursively()
+                dataRoot.mkdirs()
                 continue
             }
             stopInternal()
@@ -401,7 +429,7 @@ object PsiphonEngine {
         if (missing.isNotEmpty()) store.addAll(missing)
     }
 
-    private fun buildConfig(upstream: Boolean, dataDir: String, egressRegion: String): String = buildJsonObject {
+    private fun buildConfig(upstream: Boolean, dataRootDir: String, egressRegion: String): String = buildJsonObject {
         put("PropagationChannelId", PROPAGATION)
         put("SponsorId", SPONSOR)
         put("ClientPlatform", "android")
@@ -422,7 +450,10 @@ object PsiphonEngine {
             )
         }
         put("RemoteServerListSignaturePublicKey", SERVER_LIST_KEY)
-        put("DataStoreDirectory", dataDir)
+        // v1.6.3: DataStoreDirectory is deprecated in this core — without
+        // DataRootDirectory the core mkdirs under its cwd, which on Android
+        // is the read-only "/" (the user's "mkdir …: read-only file system")
+        put("DataRootDirectory", dataRootDir)
         put("LocalSocksProxyPort", SOCKS_PORT)
         put("LocalHttpProxyPort", HTTP_PORT)
         // in-proxy (device-coordinated tunnels) off — keep the footprint minimal
