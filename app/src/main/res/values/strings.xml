@@ -50,6 +50,14 @@
     <string name="conn_gool_desc">Two WARP tunnels chained — the second hop rides inside the first. Slower per-hop, sometimes faster end-to-end. Experimental.</string>
     <string name="conn_scan">Scan mode</string>
     <string name="conn_scan_desc">How hard and how long the engine hunts for a working endpoint before handing over.</string>
+    <string name="conn_underlay">Underlay wire (chained modes)</string>
+    <string name="conn_underlay_desc">Which tunnel carries Kuku → Psiphon and Kuku → Tor. Aether\'s proven recipe on hostile networks is a WireGuard underlay — Kuku\'s MASQUE engine cannot speak WireGuard, so the WireGuard sidecar (a second, TUN-less engine over your registered WARP WireGuard identity) provides it.</string>
+    <string name="underlay_smart">Auto — WireGuard first</string>
+    <string name="underlay_smart_desc">Real WireGuard sidecar first, MASQUE engine as fallback. Recommended.</string>
+    <string name="underlay_wg">WireGuard only</string>
+    <string name="underlay_wg_desc">The chain rides only the WireGuard sidecar (the wire Aether uses). Falls back to MASQUE only if no WireGuard profile exists.</string>
+    <string name="underlay_masque">MASQUE only</string>
+    <string name="underlay_masque_desc">The pre-1.6.5 behavior: the chain rides the MASQUE engine (QUIC/H3 + HTTP/2 wires).</string>
     <string name="scan_turbo">Turbo</string>
     <string name="scan_turbo_desc">Shortest sweep — connect fast or move on.</string>
     <string name="scan_balanced">Balanced</string>
@@ -174,6 +182,7 @@
     <string name="about_github_hint">Source code, issues and new releases</string>
     <string name="about_changes">Recent changes</string>
     <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
+    <string name="about_change_165">1.6.5 — The two-part split you drew from Aether: the chained modes (Kuku → Psiphon / Kuku → Tor) now ride a REAL WireGuard underlay by default (a second TUN-less engine over your registered WARP WireGuard identity — the wire Aether uses), with the MASQUE engine as fallback, and a new Underlay-wire selector on the Connection page (Auto / WireGuard only / MASQUE only)</string>
     <string name="about_change_164">1.6.4 — Psiphon now tries the WARP-chained path first (the same architecture you proved works on your ISP via Aether), a failing exit country automatically retries once with auto exit, and boot ticks show live progress: API reached · server list · session opening · exit region</string>
     <string name="about_change_163">1.6.3 — Fixed the Psiphon instant death: the core tried to create its data directory in a read-only place on Android and died before any connection — the 1.6.2 diagnostics exposed the cause; the core now uses the app\'s private storage properly, and you get a clear error if device storage is not writable</string>
     <string name="about_change_162">1.6.2 — Psiphon crash diagnosis: the core\'s real output is now shown on failure, stale leftover processes are killed before start, and a clean-data-store retry runs automatically</string>

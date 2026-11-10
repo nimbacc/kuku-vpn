@@ -165,6 +165,27 @@ class FallbackEngine(private val store: ProfileStore) {
     companion object {
         // literals mirror WarpRegistrar constants (kept here to avoid a core↔fallback cycle)
         private const val WARP_SOURCE = "warp"
+
+        /**
+         * v1.6.5 — ranked WireGuard-family candidates for the chained
+         * UNDERLAY sidecar (WgSidecar): real WARP WireGuard registrations
+         * only (no MASQUE-engine profiles, no gool doubles), lastGood first.
+         * The user's device proved via Aether that a WireGuard underlay is
+         * what connects the Kuku→Psiphon chain on hostile ISPs.
+         */
+        suspend fun wireguardUnderlayCandidates(store: ProfileStore, max: Int = 2): List<Profile> {
+            val lastGood = runCatching { store.lastGoodId.first() }.getOrNull()
+            return store.snapshot()
+                .filter {
+                    it.fromSubscription == WARP_SOURCE &&
+                        it.type == app.kukuvpn.data.ProfileType.WIREGUARD &&
+                        !it.transport.startsWith("masque") &&
+                        it.transport != TRANSPORT_GOOL_WG
+                }
+                .sortedBy { it.id != lastGood } // lastGood first, order otherwise stable
+                .take(max)
+        }
+
         private const val WARP_GOOL_SOURCE = "warp-gool"
         private const val TRANSPORT_MASQUE = "masque"
         private const val TRANSPORT_MASQUE_H2 = "masque-h2"

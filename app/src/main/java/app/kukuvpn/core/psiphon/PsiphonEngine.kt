@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.SystemClock
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
-import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileType
 import kotlinx.coroutines.Dispatchers
@@ -47,8 +46,15 @@ import java.util.Base64
  * and signature-verified by the core itself; no secrets in this file.
  *
  * The chained variant (Kuku → Psiphon) reaches the Psiphon network THROUGH
- * the WARP engine's SOCKS underlay (UpstreamProxyURL) — for networks where
- * Psiphon's own fronting is blocked but WARP gets out.
+ * an underlay SOCKS (UpstreamProxyURL) — for networks where Psiphon's own
+ * fronting is blocked but the underlay gets out. v1.6.5: the underlay WIRE
+ * is the caller's choice — the MASQUE engine (2085) or the REAL WireGuard
+ * sidecar (2086) — the user's Aether test proved the WG wire is the one
+ * that connects on hostile ISPs.
+ *
+ * Sandbox-proven mechanics: the core routes EVERY phase (API, server list
+ * AND tunnel dials to raw server IPs on ports 22/53/443/554) through
+ * UpstreamProxyURL when it is set.
  *
  * v1.6.2 — "psiphon core exited early" diagnostics (the user's device died
  * instantly while the same binary+config ran fine in the sandbox, and the
@@ -120,7 +126,7 @@ object PsiphonEngine {
     ).joinToString("")
 
     @Volatile private var proc: Process? = null
-    @Volatile private var procUpstream: Boolean = false
+    @Volatile private var procUpstreamPort: Int? = null
     @Volatile private var tunnelUp: Boolean = false
     @Volatile private var lastExitRegion: String = ""
     @Volatile private var lastProgress: String = ""
@@ -167,12 +173,12 @@ object PsiphonEngine {
      */
     suspend fun boot(
         context: Context,
-        upstream: Boolean,
+        upstreamPort: Int?,
         region: String,
         onTick: (Long) -> Unit,
     ): Result<Unit> = mutex.withLock {
         if (proc != null) {
-            if (procUpstream == upstream) return@withLock Result.success(Unit) // warm reuse
+            if (procUpstreamPort == upstreamPort) return@withLock Result.success(Unit) // warm reuse
             stopInternal() // different wiring — cold restart
         }
         val bin = File(context.applicationInfo.nativeLibraryDir, BINARY)
@@ -225,7 +231,7 @@ object PsiphonEngine {
             )
         }
         val cfg = File(dir, "config.json")
-        cfg.writeText(buildConfig(upstream, dataRoot.absolutePath, region))
+        cfg.writeText(buildConfig(upstreamPort, dataRoot.absolutePath, region))
 
         var attempt = 0
         var wipedOnce = false
@@ -245,7 +251,7 @@ object PsiphonEngine {
                 )
             }
             proc = started
-            procUpstream = upstream
+            procUpstreamPort = upstreamPort
             tunnelUp = false
             lastExitRegion = ""
 
@@ -366,7 +372,7 @@ object PsiphonEngine {
                     "WARN",
                     "psiphon: exit-country $region did not connect — retrying once with auto exit"
                 )
-                cfg.writeText(buildConfig(upstream, dataRoot.absolutePath, ""))
+                cfg.writeText(buildConfig(upstreamPort, dataRoot.absolutePath, ""))
                 continue
             }
             stopInternal()
@@ -476,7 +482,7 @@ object PsiphonEngine {
         if (missing.isNotEmpty()) store.addAll(missing)
     }
 
-    private fun buildConfig(upstream: Boolean, dataRootDir: String, egressRegion: String): String = buildJsonObject {
+    private fun buildConfig(upstreamPort: Int?, dataRootDir: String, egressRegion: String): String = buildJsonObject {
         put("PropagationChannelId", PROPAGATION)
         put("SponsorId", SPONSOR)
         put("ClientPlatform", "android")
@@ -506,8 +512,8 @@ object PsiphonEngine {
         // in-proxy (device-coordinated tunnels) off — keep the footprint minimal
         put("InproxyTunnelProtocolPreferProbability", 0.0)
         put("InproxyTunnelProtocolSelectionProbability", 0.0)
-        if (upstream) {
-            put("UpstreamProxyURL", "socks5://127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}")
+        if (upstreamPort != null) {
+            put("UpstreamProxyURL", "socks5://127.0.0.1:$upstreamPort")
         }
     }.toString()
 }

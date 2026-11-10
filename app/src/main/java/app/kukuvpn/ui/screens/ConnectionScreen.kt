@@ -245,6 +245,45 @@ fun ConnectionScreen(onBack: () -> Unit) {
             }
         }
 
+        /* --------------------------- underlay wire --------------------------- */
+        Card {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(R.string.conn_underlay), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.conn_underlay_desc),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val wires = listOf(
+                    Triple("smart", R.string.underlay_smart, R.string.underlay_smart_desc),
+                    Triple("wg", R.string.underlay_wg, R.string.underlay_wg_desc),
+                    Triple("masque", R.string.underlay_masque, R.string.underlay_masque_desc),
+                )
+                wires.forEach { (value, title, desc) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { scope.launch { app.settingsStore.setUnderlayWire(value) } }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        RadioButton(
+                            selected = settings.underlayWire == value,
+                            onClick = { scope.launch { app.settingsStore.setUnderlayWire(value) } },
+                        )
+                        Column(Modifier.padding(start = 4.dp)) {
+                            Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                stringResource(desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         Text(
             stringResource(R.string.conn_applies_next),
             style = MaterialTheme.typography.labelSmall,

@@ -48,6 +48,14 @@
     <string name="conn_gool_desc">دو تونل WARP پشت‌سرهم — هاپ دوم داخل هاپ اول سوار می‌شود. هر هاپ کندتر است ولی گاهی کل مسیر سریع‌تر تمام می‌شود. آزمایشی.</string>
     <string name="conn_scan">حالت جست‌وجو</string>
     <string name="conn_scan_desc">مشخص می‌کند موتور چقدر سخت و چقدر طولانی دنبال یک نقطهٔ پایانی سالم بگردد.</string>
+    <string name="conn_underlay">سیم زیرلایه (حالت‌های زنجیره‌ای)</string>
+    <string name="conn_underlay_desc">کدام تونل حامل Kuku → Psiphon و Kuku → Tor باشد. دستور همیشگی Aether روی شبکه‌های ستمگر زیرلایهٔ WireGuard است — موتور MASQUE کوکو اصلاً WireGuard بلد نیست، پس سایدکار WireGuard (یک موتور دوم بدون TUN روی هویت WireGuard ثبت‌شدهٔ WARP شما) آن را فراهم می‌کند.</string>
+    <string name="underlay_smart">خودکار — اول WireGuard</string>
+    <string name="underlay_smart_desc">اول سایدکار واقعی WireGuard، موتور MASQUE فقط به‌عنوان جایگزین. پیشنهادشده.</string>
+    <string name="underlay_wg">فقط WireGuard</string>
+    <string name="underlay_wg_desc">زنجیره فقط روی سایدکار WireGuard می‌رود (همان سیمی که Aether استفاده می‌کند). فقط اگر پروفایل WireGuard وجود نداشته باشد به MASQUE برمی‌گردد.</string>
+    <string name="underlay_masque">فقط MASQUE</string>
+    <string name="underlay_masque_desc">رفتار قبل از ۱.۶.۵: زنجیره روی موتور MASQUE می‌رود (سیم‌های QUIC/H3 و HTTP/2).</string>
     <string name="scan_turbo">توربو</string>
     <string name="scan_turbo_desc">کوتاه‌ترین جست‌وجو — سریع وصل شو یا برو سراغ بعدی.</string>
     <string name="scan_balanced">متعادل</string>
@@ -172,6 +180,7 @@
     <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
     <string name="about_changes">تغییرات اخیر</string>
     <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_165">1.6.5 — همان دو‌بخشی که از Aether نشان دادی: حالت‌های زنجیره‌ای (Kuku → Psiphon / Kuku → Tor) حالا پیش‌فرض روی زیرلایهٔ واقعی WireGuard می‌روند (یک موتور دوم بدون TUN روی هویت WireGuard ثبت‌شدهٔ WARP تو — همان سیمی که Aether استفاده می‌کند) با موتور MASQUE به‌عنوان جایگزین، و یک انتخابگر «سیم زیرلایه» هم در صفحهٔ اتصال اضافه شد (خودکار / فقط WireGuard / فقط MASQUE)</string>
     <string name="about_change_164">1.6.4 — سایفون اول مسیر زنجیره‌ای از روی WARP را امتحان می‌کند (همان معماری‌ای که با Aether روی اینترنت خودت جواب داد)، کشور خروجیِ ناکام یک بار خودکار روی خروجی آزاد تلاش می‌کند و پیشرفت اتصال زنده نمایش داده می‌شود: رسیدن به API · فهرست سرورها · باز شدن تونل · کشور خروجی</string>
     <string name="about_change_163">1.6.3 — رفع مرگ آنیِ سایفون: هسته پوشهٔ داده‌اش را در جای فقط‌خواندنی روی اندروید می‌ساخت و پیش از هر اتصالی می‌مُرد — تشخیص‌های ۱.۶.۲ علت را آشکار کرد؛ اکنون هسته از حافظهٔ خصوصی برنامه استفاده می‌کند و اگر حافظهٔ دستگاه قابل نوشتن نباشد خطای روشن می‌بینی</string>
     <string name="about_change_162">1.6.2 — تشخیص خرابی سایفون: خروجی واقعی هسته هنگام شکست نمایش داده می‌شود، پروسه‌های جا‌مانده از جلسه‌های قبل قبل از شروع کشته می‌شوند و یک تلاش مجدد با حافظهٔ پاک انجام می‌شود</string>

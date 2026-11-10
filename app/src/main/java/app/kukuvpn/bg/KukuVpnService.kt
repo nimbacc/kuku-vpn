@@ -28,6 +28,7 @@ import app.kukuvpn.core.fallback.FallbackEngine
 import app.kukuvpn.core.tor.TorEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
 import app.kukuvpn.core.warp.WarpMasqueEngine
+import app.kukuvpn.core.warp.WgSidecar
 import app.kukuvpn.core.psiphon.PsiphonEngine
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.data.AppSettings
@@ -331,40 +332,38 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 }
             }
             // v1.5.0 Psiphon candidates boot the bundled Psiphon core (child
-            // process, SOCKS on 127.0.0.1:1087). The chained variant rides the
-            // WARP engine's underlay, so the engine must be up first.
+            // process, SOCKS on 127.0.0.1:1087). The chained variant rides an
+            // underlay — v1.6.5: the WIRE is the user's choice (WireGuard
+            // sidecar first, MASQUE engine fallback) — see bootChainedUnderlay.
             val isPsiphon = candidate.fromSubscription == PsiphonEngine.SOURCE
             if (isPsiphon) {
                 val chained = candidate.transport == PsiphonEngine.TRANSPORT_CHAINED
-                if (chained && !WarpMasqueEngine.isRunning()) try {
-                    ServiceBridge.log("INFO", "booting WARP underlay for Kuku→Psiphon (scan: ${settings.scanMode})")
-                    WarpMasqueEngine.boot(
-                        this,
-                        scanMode = settings.scanMode,
-                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
-                    ).getOrThrow()
+                var underlayPort: Int? = null
+                if (chained) try {
+                    underlayPort = bootChainedUnderlay("Kuku→Psiphon")
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
-                    ServiceBridge.log("ERROR", "${candidate.name}: WARP underlay: ${e.message}")
+                    ServiceBridge.log("ERROR", "${candidate.name}: underlay: ${e.message}")
                     continue
                 }
-                if (!chained && WarpMasqueEngine.isRunning()) {
-                    // standalone Psiphon owns the exit — a warm WARP engine
-                    // would sit unused on the device's network
+                if (!chained) {
+                    // standalone Psiphon owns the exit — warm underlays would
+                    // sit unused on the device's network
                     WarpMasqueEngine.stop()
+                    WgSidecar.stop()
                 }
                 try {
                     PsiphonEngine.boot(
                         this,
-                        upstream = chained,
+                        upstreamPort = underlayPort,
                         region = settings.psiphonRegion,
                         onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s${PsiphonEngine.lastProgressLabel()}") },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
                         "psiphon core ready (socks 127.0.0.1:${PsiphonEngine.SOCKS_PORT}${
-                            if (chained) ", underlay WARP" else ""
+                            underlayPort?.let { ", underlay socks $it" } ?: ""
                         }${
                             settings.psiphonRegion.takeIf { it.isNotBlank() && it != "auto" }
                                 ?.let { ", egress $it" } ?: ""
@@ -374,52 +373,54 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: psiphon core: ${e.message}")
-                    if (chained) WarpMasqueEngine.stop()
+                    if (chained) {
+                        WarpMasqueEngine.stop()
+                        WgSidecar.stop()
+                    }
                     continue
                 }
             }
             // v1.6.0 Tor candidates boot the bundled tor core (child process
             // via the libtorrun shim, SOCKS on 127.0.0.1:1089). The chained
-            // variant rides the WARP engine's underlay (torrc Socks5Proxy),
-            // so the engine must be up first.
+            // variant rides the v1.6.5 selectable underlay (torrc Socks5Proxy).
             val isTor = candidate.fromSubscription == TorEngine.SOURCE
             if (isTor) {
                 val chained = candidate.transport == TorEngine.TRANSPORT_CHAINED
-                if (chained && !WarpMasqueEngine.isRunning()) try {
-                    ServiceBridge.log("INFO", "booting WARP underlay for Kuku→Tor (scan: ${settings.scanMode})")
-                    WarpMasqueEngine.boot(
-                        this,
-                        scanMode = settings.scanMode,
-                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
-                    ).getOrThrow()
+                var underlayPort: Int? = null
+                if (chained) try {
+                    underlayPort = bootChainedUnderlay("Kuku→Tor")
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
-                    ServiceBridge.log("ERROR", "${candidate.name}: WARP underlay: ${e.message}")
+                    ServiceBridge.log("ERROR", "${candidate.name}: underlay: ${e.message}")
                     continue
                 }
-                if (!chained && WarpMasqueEngine.isRunning()) {
-                    // standalone Tor owns the exit — a warm WARP engine would
-                    // sit unused on the device's network
+                if (!chained) {
+                    // standalone Tor owns the exit — warm underlays would sit
+                    // unused on the device's network
                     WarpMasqueEngine.stop()
+                    WgSidecar.stop()
                 }
                 try {
                     TorEngine.boot(
                         this,
-                        upstream = chained,
+                        upstreamPort = underlayPort,
                         bridgeMode = settings.torBridgeMode,
                         customBridges = settings.torCustomBridges,
                         onTick = { ms -> ServiceBridge.log("INFO", "tor booting… ${ms / 1000}s (bootstrap ${TorEngine.lastProgressLabel()})") },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
-                        "tor core ready (socks 127.0.0.1:${TorEngine.SOCKS_PORT}${if (chained) ", underlay WARP" else ""})"
+                        "tor core ready (socks 127.0.0.1:${TorEngine.SOCKS_PORT}${underlayPort?.let { ", underlay socks $it" } ?: ""})"
                     )
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: tor core: ${e.message}")
-                    if (chained) WarpMasqueEngine.stop()
+                    if (chained) {
+                        WarpMasqueEngine.stop()
+                        WgSidecar.stop()
+                    }
                     continue
                 }
             }
@@ -493,11 +494,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     if (isMasque) WarpMasqueEngine.stop()
                     if (isPsiphon) {
                         PsiphonEngine.stop()
-                        if (candidate.transport == PsiphonEngine.TRANSPORT_CHAINED) WarpMasqueEngine.stop()
+                        if (candidate.transport == PsiphonEngine.TRANSPORT_CHAINED) {
+                            WarpMasqueEngine.stop()
+                            WgSidecar.stop()
+                        }
                     }
                     if (isTor) {
                         TorEngine.stop()
-                        if (candidate.transport == TorEngine.TRANSPORT_CHAINED) WarpMasqueEngine.stop()
+                        if (candidate.transport == TorEngine.TRANSPORT_CHAINED) {
+                            WarpMasqueEngine.stop()
+                            WgSidecar.stop()
+                        }
                     }
                     stopCore()
                 }
@@ -628,6 +635,59 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         error("core listener did not open within 15s")
     }
 
+    /**
+     * v1.6.5 — the chained candidates' underlay, with the WIRE as its own
+     * choice (the Aether split the user drew: "Network backend" ≠ "Protocol"):
+     *  - "wg"     → the REAL WireGuard sidecar only;
+     *  - "masque" → the MASQUE engine only (the pre-1.6.5 behavior);
+     *  - "smart"  → WireGuard sidecar FIRST (the user's device proves that
+     *    wire connects the chain on their ISP via Aether), MASQUE fallback.
+     * Returns the underlay SOCKS port the child core must use as upstream
+     * (2086 sidecar / 2085 MASQUE engine).
+     */
+    private suspend fun bootChainedUnderlay(label: String): Int {
+        val wire = settings.underlayWire
+        if (wire != "masque") {
+            val wgCandidates = FallbackEngine.wireguardUnderlayCandidates(profileStore)
+            if (WgSidecar.isRunning()) return WgSidecar.SOCKS_PORT
+            if (wgCandidates.isNotEmpty()) {
+                try {
+                    val winner = WgSidecar.boot(this, wgCandidates).getOrThrow()
+                    ServiceBridge.log(
+                        "INFO",
+                        "WireGuard underlay up for $label (profile \"${winner.name}\", " +
+                            "socks 127.0.0.1:${WgSidecar.SOCKS_PORT})"
+                    )
+                    return WgSidecar.SOCKS_PORT
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    ServiceBridge.log(
+                        "WARN",
+                        "WireGuard underlay failed for $label: ${e.message} — " +
+                            "falling back to the MASQUE engine"
+                    )
+                }
+            } else {
+                ServiceBridge.log(
+                    "WARN",
+                    "no WireGuard profile registered yet for the $label underlay — " +
+                        "using the MASQUE engine (connect WARP once to mint WireGuard identities)"
+                )
+            }
+        }
+        if (WgSidecar.isRunning()) WgSidecar.stop()
+        if (!WarpMasqueEngine.isRunning()) {
+            ServiceBridge.log("INFO", "booting WARP (MASQUE) underlay for $label (scan: ${settings.scanMode})")
+            WarpMasqueEngine.boot(
+                this,
+                scanMode = settings.scanMode,
+                onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+            ).getOrThrow()
+        }
+        return WarpMasqueEngine.SOCKS_PORT
+    }
+
     private fun fail(message: String) {
         ServiceBridge.state.value = TunnelState.ERROR
         ServiceBridge.lastError.value = message
@@ -636,6 +696,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         scope.launch {
             stopCore()
             WarpMasqueEngine.stop()
+            WgSidecar.stop()
             // NOTE on kill switch: a failure tears the core (and with it the
             // tun interface) down completely, so there is no blackhole left to
             // hold. The old build showed a fake "kill switch active"
@@ -674,6 +735,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         ServiceBridge.stopStatsClients()
         stopCore()
         WarpMasqueEngine.stop()
+        WgSidecar.stop()
         PsiphonEngine.stop()
         TorEngine.stop()
         commandServer?.let { server ->

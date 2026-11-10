@@ -5,7 +5,6 @@ import android.os.SystemClock
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
-import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileType
 import java.io.File
@@ -71,7 +70,7 @@ object TorEngine {
     private const val TICK_MS = 5_000L
 
     @Volatile private var proc: Process? = null
-    @Volatile private var procUpstream: Boolean = false
+    @Volatile private var procUpstreamPort: Int? = null
     @Volatile private var tunnelUp: Boolean = false
     @Volatile private var lastProgress: Int = 0
     @Volatile private var lastWarning: String? = null
@@ -107,13 +106,13 @@ object TorEngine {
      */
     suspend fun boot(
         context: Context,
-        upstream: Boolean,
+        upstreamPort: Int?,
         bridgeMode: String,
         customBridges: String,
         onTick: (Long) -> Unit,
     ): Result<Unit> = mutex.withLock {
         if (proc != null) {
-            if (procUpstream == upstream) return@withLock Result.success(Unit) // warm reuse
+            if (procUpstreamPort == upstreamPort) return@withLock Result.success(Unit) // warm reuse
             stopInternal() // different wiring — cold restart
         }
         val libDir = context.applicationInfo.nativeLibraryDir
@@ -142,14 +141,14 @@ object TorEngine {
 
         val pluginObfs4 = File(libDir, LYREBIRD_BINARY)
         val pluginWebtunnel = File(libDir, WEBTUNNEL_BINARY)
-        val (pluginLines, bridgeLines) = resolveBridges(context, upstream, bridgeMode, customBridges, pluginObfs4, pluginWebtunnel)
+        val (pluginLines, bridgeLines) = resolveBridges(context, upstreamPort != null, bridgeMode, customBridges, pluginObfs4, pluginWebtunnel)
 
         ServiceBridge.log(
             "INFO",
             "tor: ${bridgeLines.size} bridge line(s) (mode $bridgeMode, " +
                 "obfs4=${pluginObfs4.exists()}, webtunnel=${pluginWebtunnel.exists()})"
         )
-        if (!upstream && bridgeLines.isEmpty() && bridgeMode != BRIDGE_MODE_NONE) {
+        if (upstreamPort == null && bridgeLines.isEmpty() && bridgeMode != BRIDGE_MODE_NONE) {
             return@withLock Result.failure(
                 IllegalStateException(
                     "no usable tor bridge lines for this build (mode: $bridgeMode) — " +
@@ -157,7 +156,7 @@ object TorEngine {
                 )
             )
         }
-        torrc.writeText(buildTorrc(upstream, dataDir.absolutePath, logFile.absolutePath, pluginLines, bridgeLines))
+        torrc.writeText(buildTorrc(upstreamPort, dataDir.absolutePath, logFile.absolutePath, pluginLines, bridgeLines))
         // tor APPENDS to its log file — start every boot from a clean slate so
         // the progress watcher only ever sees THIS boot's Bootstrapped lines
         runCatching { logFile.writeText("") }
@@ -170,7 +169,7 @@ object TorEngine {
             return@withLock Result.failure(e)
         }
         proc = started
-        procUpstream = upstream
+        procUpstreamPort = upstreamPort
         tunnelUp = false
         lastProgress = 0
         lastWarning = null
@@ -354,7 +353,7 @@ object TorEngine {
     }
 
     private fun buildTorrc(
-        upstream: Boolean,
+        upstreamPort: Int?,
         dataDir: String,
         logPath: String,
         pluginLines: List<String>,
@@ -366,10 +365,11 @@ object TorEngine {
         appendLine("AvoidDiskWrites 1")
         appendLine("ClientOnly 1")
         appendLine("SafeLogging 1")
-        if (upstream) {
+        if (upstreamPort != null) {
             // Kuku → Tor: tor (and its PTs, via TOR_PT_PROXY) reach the tor
-            // network through the WARP engine's socks underlay
-            appendLine("Socks5Proxy 127.0.0.1:${WarpMasqueEngine.SOCKS_PORT}")
+            // network through the underlay's socks (MASQUE engine 2085 or the
+            // WireGuard sidecar 2086 — the service picks the wire)
+            appendLine("Socks5Proxy 127.0.0.1:$upstreamPort")
         }
         pluginLines.forEach { appendLine(it) }
         if (bridgeLines.isNotEmpty()) {
