@@ -42,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
+import app.kukuvpn.core.fallback.FallbackEngine
 import app.kukuvpn.core.links.SubscriptionFetcher
 import app.kukuvpn.core.links.ShareLinkParser
 import app.kukuvpn.ui.ImportIntents
@@ -156,12 +157,12 @@ fun ProfilesScreen(snackbar: SnackbarHostState) {
                                         // DIRECT (the user's proven fast route).
                                         when (p.fromSubscription) {
                                             "psiphon" -> {
-                                                app.settingsStore.setProtocol(app.kukuvpn.core.fallback.FallbackEngine.PROTO_PSIPHON)
-                                                app.settingsStore.setNetwork(app.kukuvpn.core.fallback.FallbackEngine.NET_DIRECT)
+                                                app.settingsStore.setProtocol(FallbackEngine.PROTO_PSIPHON)
+                                                app.settingsStore.setNetwork(FallbackEngine.NET_DIRECT)
                                             }
                                             "tor" -> {
-                                                app.settingsStore.setProtocol(app.kukuvpn.core.fallback.FallbackEngine.PROTO_TOR)
-                                                app.settingsStore.setNetwork(app.kukuvpn.core.fallback.FallbackEngine.NET_DIRECT)
+                                                app.settingsStore.setProtocol(FallbackEngine.PROTO_TOR)
+                                                app.settingsStore.setNetwork(FallbackEngine.NET_DIRECT)
                                             }
                                         }
                                     }
