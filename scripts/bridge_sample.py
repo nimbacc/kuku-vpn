@@ -22,17 +22,26 @@ download fails, the committed snapshots in app/src/main/assets stay as-is.
 """
 import sys
 import re
+import random
 
 OBF4_SAMPLE = 150
 WT_SAMPLE = 80
 
 
 def even_sample(lines, n):
-    """Evenly sample n lines preserving spread across the whole file."""
+    """Randomly sample n lines — a NEW set on every build.
+
+    v1.6.8 fix: the old even_sample was deterministic (lines[int(i*step)]),
+    and the collector dump is IP-sorted and stable at the head — so every
+    build shipped the SAME bridges, the longest-exposed (most likely swept
+    by censors) slice of the pool. The collector pool is ~7.8k obfs4 /
+    ~0.6k webtunnel lines; a fresh random slice each build spreads the
+    exposure and gives the APK live bridges instead of corpses.
+    """
     if len(lines) <= n:
         return list(lines)
-    step = len(lines) / float(n)
-    return [lines[int(i * step)] for i in range(n)]
+    idx = sorted(random.sample(range(len(lines)), n))
+    return [lines[i] for i in idx]
 
 
 def sample_obfs4(raw_lines, n=OBF4_SAMPLE):
