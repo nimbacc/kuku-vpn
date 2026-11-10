@@ -33,8 +33,11 @@ import kotlinx.coroutines.withContext
  *
  * Bridges ("auto" mode): FRESH obfs4 + webtunnel lines bundled as assets
  * (refreshed by CI from the scriptzteam collector at every build; a committed
- * snapshot ships as the fallback). obfs4 rides liblyrebird.so, webtunnel rides
- * libwebtunnel.so — lines whose transport binary is missing on this ABI are
+ * snapshot ships as the fallback) PLUS the two built-in SNOWFLAKE lines —
+ * v1.6.8, after the field report that the bundled IP-based bridges were all
+ * dead on the user's ISP (tor stuck at 10% for the whole boot cap). obfs4
+ * rides liblyrebird.so, webtunnel rides libwebtunnel.so, snowflake rides
+ * libsnowflake.so — lines whose transport binary is missing on this ABI are
  * filtered out, and if nothing usable remains the boot FAILS with an explicit
  * error (never a silent fall to WARP).
  *
@@ -66,7 +69,13 @@ object TorEngine {
     private const val RUNNER_BINARY = "libtorrun.so"
     private const val LYREBIRD_BINARY = "liblyrebird.so"
     private const val WEBTUNNEL_BINARY = "libwebtunnel.so"
+    private const val SNOWFLAKE_BINARY = "libsnowflake.so"
     private const val BOOT_CAP_MS = 240_000L
+    // v1.6.8: a boot that makes NO new Bootstrap progress for this long is
+    // dead — the field report showed tor stuck at 10% burning the whole 240s
+    // cap on bridges the ISP had already blocked. Fail fast with the last %
+    // so the chain can move to the next candidate.
+    private const val STALL_CAP_MS = 120_000L
     private const val TICK_MS = 5_000L
 
     @Volatile private var proc: Process? = null
@@ -128,7 +137,7 @@ object TorEngine {
         // v1.6.2: stale orphaned tor/PT processes (app swept, children lived
         // on) hold the SOCKS port — kill same-UID leftovers before starting.
         val killed = app.kukuvpn.core.psiphon.PsiphonEngine.killStaleProcesses(
-            listOf(RUNNER_BINARY, TOR_BINARY, LYREBIRD_BINARY, WEBTUNNEL_BINARY)
+            listOf(RUNNER_BINARY, TOR_BINARY, LYREBIRD_BINARY, WEBTUNNEL_BINARY, SNOWFLAKE_BINARY)
         )
         if (killed > 0) {
             ServiceBridge.log("WARN", "tor: killed $killed stale process(es) from an earlier session")
@@ -141,12 +150,14 @@ object TorEngine {
 
         val pluginObfs4 = File(libDir, LYREBIRD_BINARY)
         val pluginWebtunnel = File(libDir, WEBTUNNEL_BINARY)
-        val (pluginLines, bridgeLines) = resolveBridges(context, upstreamPort != null, bridgeMode, customBridges, pluginObfs4, pluginWebtunnel)
+        val pluginSnowflake = File(libDir, SNOWFLAKE_BINARY)
+        val (pluginLines, bridgeLines) = resolveBridges(context, upstreamPort != null, bridgeMode, customBridges, pluginObfs4, pluginWebtunnel, pluginSnowflake)
 
         ServiceBridge.log(
             "INFO",
             "tor: ${bridgeLines.size} bridge line(s) (mode $bridgeMode, " +
-                "obfs4=${pluginObfs4.exists()}, webtunnel=${pluginWebtunnel.exists()})"
+                "obfs4=${pluginObfs4.exists()}, webtunnel=${pluginWebtunnel.exists()}, " +
+                "snowflake=${pluginSnowflake.exists()})"
         )
         if (upstreamPort == null && bridgeLines.isEmpty() && bridgeMode != BRIDGE_MODE_NONE) {
             return@withLock Result.failure(
@@ -199,6 +210,7 @@ object TorEngine {
         val deadline = startedAt + BOOT_CAP_MS
         var lastTick = 0L
         var logReadOfs = 0L
+        var lastProgressAt = startedAt
         try {
             while (!tunnelUp) {
                 if (proc == null || !started.isAlive) {
@@ -207,14 +219,18 @@ object TorEngine {
                             (lastWarning?.let { ": $it" } ?: "") + tailQuote()
                     )
                 }
+                val now = SystemClock.elapsedRealtime()
                 // tail the tor log for Bootstrap progress + warnings
                 runCatching {
                     if (logFile.exists() && logFile.length() > logReadOfs) {
                         val text = logFile.readText()
                         for (m in Regex("Bootstrapped (\\d+)%").findAll(text)) {
                             val pct = m.groupValues[1].toIntOrNull() ?: continue
-                            if (pct > lastProgress) lastProgress = pct
-                            if (pct >= 100) tunnelUp = true
+                            if (pct > lastProgress) {
+                                lastProgress = pct
+                                lastProgressAt = now
+                                if (pct >= 100) tunnelUp = true
+                            }
                         }
                         for (line in text.lines()) {
                             if (line.contains("[warn]") || line.contains("[err]")) {
@@ -224,11 +240,22 @@ object TorEngine {
                         logReadOfs = text.length.toLong()
                     }
                 }
-                val now = SystemClock.elapsedRealtime()
                 if (now > deadline) {
                     throw IllegalStateException(
                         "tor bootstrap timeout (${BOOT_CAP_MS / 1000}s, stuck at $lastProgress%)" +
                             (lastWarning?.let { " — $it" } ?: "") + tailQuote(2)
+                    )
+                }
+                // v1.6.8: no NEW Bootstrap milestone for 2 minutes — the bridge
+                // pool is dead/blocked on this network; fail now instead of
+                // ticking to the 240s cap (the "6 minutes of nothing" report)
+                if (now - lastProgressAt > STALL_CAP_MS) {
+                    throw IllegalStateException(
+                        "tor bootstrap stuck at $lastProgress% (no progress in ${STALL_CAP_MS / 1000}s) — " +
+                            "the bundled bridges look blocked on this network — try the Kuku→Tor " +
+                            "chain (WARP underlay), paste fresh bridges (Bridge mode → Custom), " +
+                            "or switch the bridge mode" +
+                            (lastWarning?.let { " — $it" } ?: "")
                     )
                 }
                 if (now - lastTick >= TICK_MS) {
@@ -272,7 +299,7 @@ object TorEngine {
     /**
      * Bridge configuration: returns (ClientTransportPlugin lines, Bridge lines).
      * Transports whose binary is missing on this ABI are dropped together with
-     * their bridge lines; other transports (meek_lite/snowflake pasted lines)
+     * their bridge lines; other transports (meek_lite/conjure pasted lines)
      * are dropped too — no bundled plugin — and an empty pool is a real error.
      */
     private fun resolveBridges(
@@ -282,6 +309,7 @@ object TorEngine {
         customBridges: String,
         pluginObfs4: File,
         pluginWebtunnel: File,
+        pluginSnowflake: File,
     ): Pair<List<String>, List<String>> {
         if (upstream) {
             // Kuku → Tor: the WARP underlay plays the bridge role — tor through
@@ -291,16 +319,18 @@ object TorEngine {
         val plugins = buildList {
             if (pluginObfs4.exists()) add("ClientTransportPlugin obfs4 exec ${pluginObfs4.absolutePath}")
             if (pluginWebtunnel.exists()) add("ClientTransportPlugin webtunnel exec ${pluginWebtunnel.absolutePath}")
+            if (pluginSnowflake.exists()) add("ClientTransportPlugin snowflake exec ${pluginSnowflake.absolutePath}")
         }
         val raw: List<String> = when (bridgeMode) {
             BRIDGE_MODE_CUSTOM -> customBridges.lines()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && !it.startsWith("#") }
             BRIDGE_MODE_NONE -> return plugins to emptyList()
-            else -> // auto: bundled fresh snapshots (CI-refreshed)
+            else -> // auto: bundled fresh snapshots (CI-refreshed) + builtin snowflake
                 (
                     context.assets.open("tor_bridges_obfs4.txt").bufferedReader().readLines() +
-                        context.assets.open("tor_bridges_webtunnel.txt").bufferedReader().readLines()
+                        context.assets.open("tor_bridges_webtunnel.txt").bufferedReader().readLines() +
+                        context.assets.open("tor_bridges_snowflake.txt").bufferedReader().readLines()
                     ).map { it.trim() }
                     .filter { it.isNotEmpty() && !it.startsWith("#") }
         }
@@ -308,7 +338,8 @@ object TorEngine {
             when {
                 line.startsWith("obfs4") -> pluginObfs4.exists()
                 line.startsWith("webtunnel") -> pluginWebtunnel.exists()
-                // meek_lite / snowflake / other pasted lines: no bundled plugin
+                line.startsWith("snowflake") -> pluginSnowflake.exists()
+                // meek_lite / conjure / other pasted lines: no bundled plugin
                 else -> false
             }
         }

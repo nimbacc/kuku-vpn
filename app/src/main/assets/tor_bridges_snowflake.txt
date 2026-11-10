@@ -1,0 +1,6 @@
+# snowflake — the two BUILT-IN bridge lines (Tor Browser ships the same two).
+# The dummy IPs and fingerprints are what tor needs to model the bridge; the
+# real broker is found via domain fronting by the client binary, whose STUN
+# servers and CDN fronts are compiled in. Static — nothing to refresh.
+snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72
+snowflake 192.0.2.4:80 8838024498816A039FCBBAB14E6F40A0843051FA

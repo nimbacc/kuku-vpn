@@ -204,6 +204,11 @@ private object SettingsKeys {
     val PSIPHON_REGION = stringPreferencesKey("psiphon_region")
     val TOR_BRIDGE_MODE = stringPreferencesKey("tor_bridge_mode")
     val TOR_CUSTOM_BRIDGES = stringPreferencesKey("tor_custom_bridges")
+    // v1.6.8: the protocol-wiring memory — JSON map
+    // "<protocol>|<netClass>" → "direct" | "chained:masque" | "chained:wg"
+    // (the wiring that last VERIFIED a connect there; the Aether
+    // "remembers which one worked on this network" rule for Psiphon/Tor)
+    val WIRING = stringPreferencesKey("wiring_memory")
 }
 
 class SettingsStore(private val context: Context) {
@@ -257,4 +262,26 @@ class SettingsStore(private val context: Context) {
     suspend fun setPsiphonRegion(v: String) = context.settingsDataStore.edit { it[SettingsKeys.PSIPHON_REGION] = v }
     suspend fun setTorBridgeMode(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_BRIDGE_MODE] = v }
     suspend fun setTorCustomBridges(v: String) = context.settingsDataStore.edit { it[SettingsKeys.TOR_CUSTOM_BRIDGES] = v }
+
+    /**
+     * v1.6.8 — the wiring that last VERIFIED a connect for [protocol] on
+     * network class [netClass] ("wifi" | "cell" | "any"): "direct" |
+     * "chained:masque" | "chained:wg". Read by the service to lead the chain
+     * with the proven path; written on every verified protocol connect.
+     */
+    suspend fun wiringFor(protocol: String, netClass: String): String? =
+        context.settingsDataStore.data.map { prefs ->
+            prefs[SettingsKeys.WIRING]?.let {
+                runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrNull()
+            }?.get("$protocol|$netClass")
+        }.first()
+
+    suspend fun setWiring(protocol: String, netClass: String, wiring: String) {
+        context.settingsDataStore.edit { prefs ->
+            val cur = prefs[SettingsKeys.WIRING]?.let {
+                runCatching { json.decodeFromString<Map<String, String>>(it) }.getOrNull()
+            } ?: emptyMap()
+            prefs[SettingsKeys.WIRING] = json.encodeToString(cur + ("$protocol|$netClass" to wiring))
+        }
+    }
 }

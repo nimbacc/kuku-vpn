@@ -152,6 +152,9 @@ jobs:
       #  - libtorrun.so    : the shim compiled here with the NDK clang.
       #  - liblyrebird.so  : obfs4 (+ meek_lite) pluggable transport.
       #  - libwebtunnel.so : webtunnel pluggable transport.
+      #  - libsnowflake.so : snowflake pluggable transport (v1.6.8) — the
+      #                      domain-fronted transport that survives where the
+      #                      IP-based obfs4/webtunnel bridges get swept.
       # PT sources come from the OFFICIAL Go module proxy
       # (proxy.golang.org serves gitlab.torproject.org modules) at PINNED
       # versions — no git clone of gitlab.torproject.org needed. The PT
@@ -184,7 +187,7 @@ jobs:
           done
           file "$out"/*/libtor.so
 
-      - name: build pluggable transports (lyrebird obfs4 + webtunnel, all ABIs)
+      - name: build pluggable transports (lyrebird obfs4 + webtunnel + snowflake, all ABIs)
         run: |
           set -e
           out=/tmp/tor-out
@@ -192,12 +195,18 @@ jobs:
           export CGO_ENABLED=0
           L=gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/cmd/lyrebird
           W=gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/main/client
+          S=git.torproject.org/pluggable-transports/snowflake.git/v2/client
           work=$(mktemp -d)
           cd "$work"
           go mod init kuku-pt >/dev/null
           # pinned versions (lyrebird is pseudo-versioned — no semver tags upstream)
           go get gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/cmd/lyrebird@v0.0.0-20261104192811-59ac7e400c38
           go get gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/main/client@v0.0.7
+          # v1.6.8: snowflake client v2.5.1 — the transport that survives where
+          # IP-based obfs4/webtunnel bridges get swept (domain-fronted broker,
+          # WebRTC data channels; the sandbox proved the exact build recipe and
+          # the bridge-line handshake against real tor 0.4.8)
+          go get git.torproject.org/pluggable-transports/snowflake.git/v2/client@v2.5.1
           for abi in arm64-v8a armeabi-v7a x86_64; do
             case "$abi" in
               # only android/arm64 links internally; amd64/arm need the NDK clang
@@ -209,6 +218,8 @@ jobs:
               go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/$abi/liblyrebird.so" "$L"
             GOOS=android GOARCH=$garch CGO_ENABLED=$cgo CC="$cc" \
               go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/$abi/libwebtunnel.so" "$W"
+            GOOS=android GOARCH=$garch CGO_ENABLED=$cgo CC="$cc" \
+              go build -trimpath -ldflags "-s -w -checklinkname=0" -o "$out/$abi/libsnowflake.so" "$S"
           done
           ls -lh "$out"/*/
 
@@ -253,7 +264,7 @@ jobs:
           name: psiphon
           path: app/src/main/jniLibs
 
-      - name: download tor binaries (libtor/libtorrun/lyrebird/webtunnel → jniLibs)
+      - name: download tor binaries (libtor/libtorrun/lyrebird/webtunnel/snowflake → jniLibs)
         uses: actions/download-artifact@v4
         with:
           name: tor

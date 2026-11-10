@@ -253,6 +253,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 chain = filtered
             }
         }
+        // v1.6.8: the wiring that last verified on this network leads —
+        // no more re-burning the dead direct/WG attempts on every connect
+        chain = leadWithRememberedWiring(chain)
         if (chain.isEmpty()) {
             fail("no profile available")
             return
@@ -276,6 +279,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         var coldEndpointPending = true
         for (candidate in chain) {
             if (stopping.get()) return
+            // v1.6.8: the underlay wire THIS candidate rode ("", "wg", "masque")
+            // — recorded into the wiring memory when the candidate verifies
+            var underlayWireUsed = ""
             ServiceBridge.activeProfile.value = candidate
             ServiceBridge.log("INFO", "trying profile: ${candidate.name} (${candidate.summary()})")
             ServiceBridge.state.value = TunnelState.CONNECTING
@@ -344,7 +350,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 val chained = candidate.transport == PsiphonEngine.TRANSPORT_CHAINED
                 var underlayPort: Int? = null
                 if (chained) try {
-                    underlayPort = bootChainedUnderlay("Kuku→Psiphon", underlayWire())
+                    val underlay = bootChainedUnderlay("Kuku→Psiphon", underlayWire(FallbackEngine.PROTO_PSIPHON))
+                    underlayPort = underlay.socksPort
+                    underlayWireUsed = underlay.wire
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
@@ -392,7 +400,9 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 val chained = candidate.transport == TorEngine.TRANSPORT_CHAINED
                 var underlayPort: Int? = null
                 if (chained) try {
-                    underlayPort = bootChainedUnderlay("Kuku→Tor", underlayWire())
+                    val underlay = bootChainedUnderlay("Kuku→Tor", underlayWire(FallbackEngine.PROTO_TOR))
+                    underlayPort = underlay.socksPort
+                    underlayWireUsed = underlay.wire
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
@@ -479,6 +489,23 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     if (netClass.isNotEmpty()) {
                         profileStore.setLastGoodForNetwork(netClass, candidate.id)
                     }
+                    // v1.6.8: remember the protocol wiring that just VERIFIED
+                    // (direct vs Kuku→core over which underlay wire) — the next
+                    // connect on this network leads with it instead of
+                    // re-burning the dead candidates first
+                    if (isPsiphon || isTor) {
+                        val proto = if (isPsiphon) FallbackEngine.PROTO_PSIPHON else FallbackEngine.PROTO_TOR
+                        val chainedCand = candidate.transport == PsiphonEngine.TRANSPORT_CHAINED ||
+                            candidate.transport == TorEngine.TRANSPORT_CHAINED
+                        val wiring =
+                            if (chainedCand) "chained:" + underlayWireUsed.ifEmpty { "masque" }
+                            else "direct"
+                        runCatching { settingsStore.setWiring(proto, netClass.ifEmpty { "any" }, wiring) }
+                        ServiceBridge.log(
+                            "INFO",
+                            "wiring memory: $proto on ${netClass.ifEmpty { "any" }} → $wiring"
+                        )
+                    }
                     ServiceBridge.startStatsClients()
                     startNotif(
                         getString(R.string.notif_active) +
@@ -522,6 +549,40 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             "all ${chain.size} candidate(s) failed" +
                 (lastCandidateError?.let { " — last: $it" } ?: "")
         )
+    }
+
+    /**
+     * v1.6.8 — the Aether memory rule for the protocol cores: the wiring
+     * (direct vs Kuku→core over a specific underlay wire) that last VERIFIED
+     * on this network class leads the chain, so the next connect skips the
+     * dead candidates (the field log: direct Psiphon burned its 75s no-sign
+     * window and the WG underlay burned ~30s — on EVERY connect) before
+     * reaching the path that actually works. Only the Smart network pin
+     * reorders; explicit Direct/MASQUE/WG pins stay absolute. A failed
+     * remembered path self-heals: the chain continues and the winner that
+     * verifies next overwrites the memory.
+     */
+    private suspend fun leadWithRememberedWiring(chain: List<Profile>): List<Profile> {
+        if (settings.network != FallbackEngine.NET_SMART) return chain
+        val proto = when {
+            chain.any { it.fromSubscription == PsiphonEngine.SOURCE } -> FallbackEngine.PROTO_PSIPHON
+            chain.any { it.fromSubscription == TorEngine.SOURCE } -> FallbackEngine.PROTO_TOR
+            else -> return chain // plain-VPN chain: profile lastGood already handles memory
+        }
+        val memo = settingsStore.wiringFor(proto, currentNetworkClass().ifEmpty { "any" }) ?: return chain
+        val leadChained = memo.startsWith("chained")
+        val isChained = { p: Profile ->
+            p.transport == PsiphonEngine.TRANSPORT_CHAINED || p.transport == TorEngine.TRANSPORT_CHAINED
+        }
+        val reordered = chain.sortedBy { p -> if (leadChained == isChained(p)) 0 else 1 }
+        if (reordered.firstOrNull()?.id != chain.firstOrNull()?.id) {
+            ServiceBridge.log(
+                "INFO",
+                "wiring memory: $memo verified earlier on this network — " +
+                    (if (leadChained) "Kuku→core chain" else "direct core") + " leads"
+            )
+        }
+        return reordered
     }
 
     /** Used by serviceReload() to bounce a single profile without the fallback chain. */
@@ -649,17 +710,26 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
      *  - "wg"     → the REAL WireGuard sidecar only — a failure fails HONESTLY,
      *    it never switches wires behind the user's back;
      *  - "masque" → the MASQUE engine only (the pre-1.6.5 behavior);
-     *  - "smart"  → WireGuard sidecar FIRST, MASQUE fallback.
+     *  - "smart"  → WireGuard sidecar FIRST, MASQUE fallback — unless the
+     *    v1.6.8 wiring memory remembers a wire this protocol VERIFIED with on
+     *    this network class, which then leads (no dead-wire burn each connect).
      * Returns the underlay SOCKS port the child core must use as upstream
      * (2086 sidecar / 2085 MASQUE engine).
      */
-    private fun underlayWire(): String = when (settings.network) {
+    private suspend fun underlayWire(protocol: String): String = when (settings.network) {
         FallbackEngine.NET_WG -> "wg"
         FallbackEngine.NET_MASQUE -> "masque"
-        else -> "smart" // NET_SMART — and the defensive default
+        else -> when (settingsStore.wiringFor(protocol, currentNetworkClass().ifEmpty { "any" })) {
+            "chained:masque" -> "masque"
+            "chained:wg" -> "wg"
+            else -> "smart" // NET_SMART — and the defensive default
+        }
     }
 
-    private suspend fun bootChainedUnderlay(label: String, wire: String): Int {
+    /** v1.6.8 — the underlay result: the SOCKS port AND the wire that won. */
+    private data class Underlay(val socksPort: Int, val wire: String)
+
+    private suspend fun bootChainedUnderlay(label: String, wire: String): Underlay {
         // v1.6.6 FIX (the 1.6.5 field report): the sidecar is usually the
         // FIRST libbox user in a session. Without Setup, libbox's package-level
         // working path is empty and its always-on cache-file service opens
@@ -673,7 +743,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         ensureLibbox()
         if (wire != "masque") {
             val wgCandidates = FallbackEngine.wireguardUnderlayCandidates(profileStore)
-            if (WgSidecar.isRunning) return WgSidecar.SOCKS_PORT
+            if (WgSidecar.isRunning) return Underlay(WgSidecar.SOCKS_PORT, "wg")
             if (wgCandidates.isNotEmpty()) {
                 try {
                     val winner = WgSidecar.boot(this, wgCandidates).getOrThrow()
@@ -682,7 +752,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         "WireGuard underlay up for $label (profile \"${winner.name}\", " +
                             "socks 127.0.0.1:${WgSidecar.SOCKS_PORT})"
                     )
-                    return WgSidecar.SOCKS_PORT
+                    return Underlay(WgSidecar.SOCKS_PORT, "wg")
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -747,7 +817,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     "this wire is not usable on this network"
             )
         }
-        return WarpMasqueEngine.SOCKS_PORT
+        return Underlay(WarpMasqueEngine.SOCKS_PORT, "masque")
     }
 
     /**
