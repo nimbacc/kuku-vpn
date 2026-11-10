@@ -316,10 +316,10 @@ jobs:
           for kind in release debug; do
             for f in app/build/outputs/apk/$kind/*.apk; do
               base=$(basename "$f") # e.g. app-arm64-v8a-release.apk / ...-release-unsigned.apk
-              # strip "-unsigned" BEFORE the kind suffix — the unsigned name ends
-              # in "-unsigned.apk", so "$kind.apk" stripping alone never matched
-              # and produced Kuku-<ver>-<abi>-release-unsigned.apk.apk (v1.6.0/1.6.1 bug)
-              tag="${base#app-}"; tag="${tag%-unsigned}"; tag="${tag%-$kind.apk}" # arm64-v8a | universal
+              # % strips SUFFIXES, so peel ".apk" first and then each tag
+              # segment — "${x%-unsigned}" never matched "...-unsigned.apk"
+              # and produced Kuku-<ver>-<abi>-release-unsigned.apk.apk
+              tag="${base#app-}"; tag="${tag%.apk}"; tag="${tag%-unsigned}"; tag="${tag%-release}"; tag="${tag%-debug}" # arm64-v8a | universal
               if [ "$kind" = "release" ]; then
                 cp "$f" "dist/Kuku-${VER}-${tag}.apk"
               else
