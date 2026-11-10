@@ -297,6 +297,11 @@ object PsiphonEngine {
             stopInternal()
             return@withLock Result.failure(failure ?: IllegalStateException("psiphon boot failed"))
         }
+        // unreachable: every path in the retry loop returns or continues —
+        // but the withLock lambda must be typed Result<Unit>, and Kotlin
+        // types a trailing `while (true)` as Unit without this line.
+        @Suppress("UNREACHABLE_CODE")
+        return@withLock Result.failure(IllegalStateException("psiphon boot loop exited unexpectedly"))
     }
 
     fun stop() {
