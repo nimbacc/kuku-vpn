@@ -19,15 +19,20 @@ import kotlinx.coroutines.flow.first
  *   masque — the MASQUE pair first, then the smart chain as a safety net
  *   wg     — the plain WireGuard WARP ports first, then the smart chain
  *   gool   — the WARP×2 inner-tunnel profile first, then the smart chain
- *   psiphon / kuku-psiphon — the bundled Psiphon core first (v1.5.0),
- *                            then the smart chain
- *   tor / kuku-tor — the bundled Tor core first (v1.6.0), then the smart chain
+ *   psiphon / kuku-psiphon — ONLY the bundled Psiphon core (v1.6.1)
+ *   tor / kuku-tor         — ONLY the bundled Tor core (v1.6.1)
  *
- * A pinned method that cannot connect must NEVER leave the app offline, so
- * every pin keeps the smart chain behind it — the pin decides what is tried
- * FIRST, not what is the only option. v1.6.0: when a psiphon/tor pin falls
- * through to the WARP chain, the service surfaces an explicit warning banner
- * (the "connected but it's secretly WARP" lie is gone).
+ * v1.6.1 — Psiphon and Tor are EXCLUSIVE methods, per the user's explicit
+ * request ("اینکه خودکار برگرده رو وارپ رو هم حذف کن" — remove the automatic
+ * return to WARP). A pinned psiphon/tor method — or a manually selected
+ * psiphon/tor profile in the Profiles list — must NEVER end up carrying
+ * traffic over WARP: when the pinned family fails, the connect FAILS with
+ * the real error instead of quietly substituting a different exit. The same
+ * rule holds when the user picked the psiphon/tor profile from the Profiles
+ * list (protocol stays "smart" there) — the selection decides the family,
+ * not just what is tried first. Only the WARP-family pins (masque/wg/gool)
+ * keep the smart chain behind them, because every candidate in that chain
+ * is a WARP exit — no exit substitution can happen.
  *
  * Per-network memory (the Aether "remembers which one worked on this
  * network" rule): when the store holds a profile that last VERIFIED on the
@@ -89,6 +94,25 @@ class FallbackEngine(private val store: ProfileStore) {
         val byId = all.associateBy { it.id }
         val selected = selectedId?.let { byId[it] }
         val lastGood = store.lastGoodId.first()?.let { byId[it] }
+
+        // v1.6.1 — Psiphon/Tor are exclusive: when the pinned METHOD (or the
+        // selected PROFILE, however the user picked it) belongs to the
+        // psiphon/tor family, the chain is that family ONLY. No WARP safety
+        // net — a failed Psiphon/Tor connect must surface its real error,
+        // never quietly ride a different exit.
+        val exclusiveFamily = when {
+            protocol == PROTOCOL_PSIPHON || protocol == PROTOCOL_KUKU_PSIPHON -> PSIPHON_SOURCE
+            protocol == PROTOCOL_TOR || protocol == PROTOCOL_KUKU_TOR -> TOR_SOURCE
+            selected?.fromSubscription == PSIPHON_SOURCE -> PSIPHON_SOURCE
+            selected?.fromSubscription == TOR_SOURCE -> TOR_SOURCE
+            else -> null
+        }
+        if (exclusiveFamily != null) {
+            return all
+                .filter { it.fromSubscription == exclusiveFamily }
+                .filterNot { it.id in failedIds }
+                .take(maxCandidates)
+        }
 
         // gool profiles only ever appear when the user pinned the gool method
         val goolProfiles = all.filter { isGool(it) }

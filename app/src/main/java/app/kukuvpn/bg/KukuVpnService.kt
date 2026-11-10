@@ -202,21 +202,26 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             }
         }
         // v1.5.0 Psiphon backends: lazily register the bundled-Psiphon
-        // candidates (standalone + Kuku→Psiphon) — same lazy pattern as gool
+        // candidates (standalone + Kuku→Psiphon). v1.6.1: a registration
+        // failure must FAIL the connect with the real error — falling through
+        // to the WARP chain here is exactly the silent substitution the user
+        // ordered removed.
         if (protocol == FallbackEngine.PROTOCOL_PSIPHON || protocol == FallbackEngine.PROTOCOL_KUKU_PSIPHON) {
             try {
                 PsiphonEngine.ensureProfiles(this)
             } catch (e: Exception) {
-                ServiceBridge.log("WARN", "psiphon profiles: ${e.message} — falling back to Smart")
+                fail("psiphon profiles: ${e.message}")
+                return
             }
         }
         // v1.6.0 Tor backends: lazily register the bundled-Tor candidates
-        // (standalone + Kuku→Tor) — same lazy pattern
+        // (standalone + Kuku→Tor) — same exclusive failure rule (v1.6.1)
         if (protocol == FallbackEngine.PROTOCOL_TOR || protocol == FallbackEngine.PROTOCOL_KUKU_TOR) {
             try {
                 TorEngine.ensureProfiles(this)
             } catch (e: Exception) {
-                ServiceBridge.log("WARN", "tor profiles: ${e.message} — falling back to Smart")
+                fail("tor profiles: ${e.message}")
+                return
             }
         }
         startNotif(getString(R.string.notif_connecting), ongoing = true)
@@ -224,16 +229,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         ServiceBridge.resetSession()
         ServiceBridge.state.value = TunnelState.PREPARING
 
-        // v1.6.0 honesty: remember which family the user PINNED, so when the
-        // pinned method fails and a WARP candidate ends up carrying traffic,
-        // the UI says so out loud instead of showing a plain "Connected".
-        val pinnedFamily = when (protocol) {
-            FallbackEngine.PROTOCOL_PSIPHON, FallbackEngine.PROTOCOL_KUKU_PSIPHON -> PsiphonEngine.SOURCE
-            FallbackEngine.PROTOCOL_TOR, FallbackEngine.PROTOCOL_KUKU_TOR -> TorEngine.SOURCE
-            else -> null
-        }
-        var pinnedFailure: String? = null
-
+        // v1.6.1: psiphon/tor pins are EXCLUSIVE (FallbackEngine returns only
+        // that family) — a WARP candidate can no longer follow a pinned
+        // Psiphon/Tor, so a failed pin now ends in an honest ERROR state with
+        // the real failure reason instead of a WARP substitution. The old
+        // fallback-warning banner path is gone with the behaviour.
         var chain = buildChain(protocol)
         // stealth scan mode: no raw-UDP wire format at all — drop the plain
         // WireGuard WARP candidates (their handshake is bare UDP on the wire);
@@ -373,7 +373,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
-                    pinnedFailure = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: psiphon core: ${e.message}")
                     if (chained) WarpMasqueEngine.stop()
                     continue
@@ -419,7 +418,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return
                     lastCandidateError = e.message
-                    pinnedFailure = e.message
                     ServiceBridge.log("ERROR", "${candidate.name}: tor core: ${e.message}")
                     if (chained) WarpMasqueEngine.stop()
                     continue
@@ -467,22 +465,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     ServiceBridge.lit(TunnelStage.TUNNEL)
                     ServiceBridge.lit(TunnelStage.EXIT)
                     ServiceBridge.exitIp.value = verdict.exitIp
-                    // v1.6.0 honesty: if the user pinned Psiphon/Tor but the
-                    // pinned candidates all failed and a WARP candidate is
-                    // carrying the traffic, SAY SO — never a plain "Connected".
-                    if (pinnedFamily != null && candidate.fromSubscription != pinnedFamily) {
-                        ServiceBridge.fallbackNote.value =
-                            getString(
-                                R.string.fallback_notice,
-                                getString(if (pinnedFamily == PsiphonEngine.SOURCE) R.string.method_psiphon else R.string.method_tor),
-                                pinnedFailure ?: "unknown",
-                            )
-                        ServiceBridge.log(
-                            "WARN",
-                            "honesty: pinned method failed (${pinnedFailure ?: "?"}) — " +
-                                "this connection rides the WARP fallback chain"
-                        )
-                    }
                     ServiceBridge.state.value = TunnelState.ACTIVE
                     profileStore.select(candidate.id)
                     profileStore.setLastGood(candidate.id)
@@ -507,11 +489,6 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) return // service teardown
                     lastError = e
-                    // v1.6.0: a pinned-family candidate that dies at core-start
-                    // or verify is the reason the fallback banner will show
-                    if (pinnedFamily != null && candidate.fromSubscription == pinnedFamily) {
-                        pinnedFailure = e.message
-                    }
                     ServiceBridge.log("ERROR", "${candidate.name} @ ${attempt.host}:${attempt.port}: ${e.message}")
                     if (isMasque) WarpMasqueEngine.stop()
                     if (isPsiphon) {

@@ -62,17 +62,17 @@
 
     <!-- Psiphon backends (v1.5.0) -->
     <string name="conn_psiphon">سایفون</string>
-    <string name="conn_psiphon_desc">شبکهٔ سایفون (هستهٔ همراه برنامه) — روش‌های چرخشی کلاینت/سرور مخصوص شبکه‌های فیلترشده. از WARP کندتر است ولی به‌مراتب سخت‌تر بلاک می‌شود.</string>
+    <string name="conn_psiphon_desc">شبکهٔ سایفون (هستهٔ همراه برنامه) — روش‌های چرخشی کلاینت/سرور مخصوص شبکه‌های فیلترشده. از WARP کندتر است ولی به‌مراتب سخت‌تر بلاک می‌شود. انحصاری: اگر سایفون وصل نشود، کوکو خطای واقعی را نشان می‌دهد — هرگز بی‌صدا شما را به WARP نمی‌برد.</string>
     <string name="conn_kuku_psiphon">کوکو → سایفون</string>
-    <string name="conn_kuku_psiphon_desc">سایفون از دل تونل WARP — برای شبکه‌هایی که خودِ سایفون بلاک است ولی WARP بیرون می‌زند.</string>
+    <string name="conn_kuku_psiphon_desc">سایفون از دل تونل WARP — برای شبکه‌هایی که خودِ سایفون بلاک است ولی WARP بیرون می‌زند. آی‌پی خروجی همچنان سایفون است؛ WARP فقط جادهٔ رسیدن به آن است.</string>
     <string name="psiphon_profile_name">سایفون (رایگان)</string>
     <string name="psiphon_chain_profile_name">کوکو → سایفون</string>
 
     <!-- Tor backends (v1.6.0) -->
     <string name="conn_tor">تور (Tor)</string>
-    <string name="conn_tor_desc">شبکهٔ واقعی تور (tor 0.4.8 همراه برنامه) — با پل‌های obfs4 و webtunnel که فهرست تازهٔ آن‌ها در هر بیلد داخل برنامه قرار می‌گیرد. کندترین گزینه، مقاوم‌ترین در برابر فیلترینگ.</string>
+    <string name="conn_tor_desc">شبکهٔ واقعی تور (tor 0.4.8 همراه برنامه) — با پل‌های obfs4 و webtunnel که فهرست تازهٔ آن‌ها در هر بیلد داخل برنامه قرار می‌گیرد. کندترین گزینه، مقاوم‌ترین در برابر فیلترینگ. انحصاری: اگر تور بوت نشود، کوکو خطای واقعی را نشان می‌دهد — هرگز بی‌صدا شما را به WARP نمی‌برد.</string>
     <string name="conn_kuku_tor">کوکو → تور</string>
-    <string name="conn_kuku_tor_desc">تور از دل تونل WARP — برای شبکه‌هایی که خودِ تور در دسترس نیست ولی WARP بیرون می‌زند. بدون پل اجرا می‌شود (WARP نقش پل را بازی می‌کند).</string>
+    <string name="conn_kuku_tor_desc">تور از دل تونل WARP — برای شبکه‌هایی که خودِ تور در دسترس نیست ولی WARP بیرون می‌زند. بدون پل اجرا می‌شود (WARP نقش پل را بازی می‌کند). آی‌پی خروجی همچنان تور است؛ WARP فقط جادهٔ رسیدن به آن است.</string>
     <string name="tor_profile_name">تور (رایگان)</string>
     <string name="tor_chain_profile_name">کوکو → تور</string>
 
@@ -172,6 +172,7 @@
     <string name="about_github_hint">سورس‌کد، گزارش‌ها و نسخه‌های جدید</string>
     <string name="about_changes">تغییرات اخیر</string>
     <string name="about_change_141">1.4.1 — صفحهٔ درباره: نسخه، موتور و پیوند گیت‌هاب</string>
+    <string name="about_change_161">1.6.1 — پایان برگشت خودکار به WARP: اگر سایفون یا تور شکست بخورد (چه از صفحهٔ اتصال، چه از فهرست پروفایل‌ها)، کوکو خطای واقعی را نشان می‌دهد و آفلاین می‌ماند — دیگر بی‌صدا از راه WARP وصل نمی‌شود</string>
     <string name="about_change_160">1.6.0 — سایفون واقعی (همهٔ معماری‌ها + انتخاب کشور خروجی) و تور واقعی (پل‌های تازهٔ obfs4/webtunnel + پیست پل خودت) — و پایان جایگزینی بی‌صدا: نجات با WARP صادقانه اعلام می‌شود</string>
     <string name="about_change_150">1.5.0 — سایفون و کوکو → سایفون: دو روش جدید بدون سرور</string>
     <string name="about_change_140">1.4.0 — توربو FLUX: چرخش زندهٔ چندمسیره، همیشه روی سریع‌ترین لبه</string>
