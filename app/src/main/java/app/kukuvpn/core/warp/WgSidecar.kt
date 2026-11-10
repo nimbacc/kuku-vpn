@@ -63,7 +63,7 @@ object WgSidecar {
             for (candidate in candidates.take(2)) {
                 val started = bootOne(platform, candidate)
                 if (started.isSuccess) return@withLock Result.success(candidate)
-                lastErr = started.exceptionOrNull()
+                lastErr = started.exceptionOrNull() as? Exception
                 stopInternal() // partial boot — deterministic teardown, next candidate
             }
             Result.failure(

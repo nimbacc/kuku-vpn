@@ -376,7 +376,7 @@ object TorEngine {
             appendLine("UseBridges 1")
             appendLine("UpdateBridgesFromAuthority 0")
             bridgeLines.forEach { appendLine("Bridge $it") }
-        } else if (!upstream) {
+        } else if (upstreamPort == null) {
             appendLine("UseBridges 0")
         }
     }

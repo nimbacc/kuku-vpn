@@ -649,7 +649,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         val wire = settings.underlayWire
         if (wire != "masque") {
             val wgCandidates = FallbackEngine.wireguardUnderlayCandidates(profileStore)
-            if (WgSidecar.isRunning()) return WgSidecar.SOCKS_PORT
+            if (WgSidecar.isRunning) return WgSidecar.SOCKS_PORT
             if (wgCandidates.isNotEmpty()) {
                 try {
                     val winner = WgSidecar.boot(this, wgCandidates).getOrThrow()
@@ -676,7 +676,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 )
             }
         }
-        if (WgSidecar.isRunning()) WgSidecar.stop()
+        if (WgSidecar.isRunning) WgSidecar.stop()
         if (!WarpMasqueEngine.isRunning()) {
             ServiceBridge.log("INFO", "booting WARP (MASQUE) underlay for $label (scan: ${settings.scanMode})")
             WarpMasqueEngine.boot(
