@@ -108,10 +108,20 @@ class FallbackEngine(private val store: ProfileStore) {
             else -> null
         }
         if (exclusiveFamily != null) {
-            return all
+            val family = all
                 .filter { it.fromSubscription == exclusiveFamily }
                 .filterNot { it.id in failedIds }
-                .take(maxCandidates)
+            // v1.6.4: within the Psiphon family, the WARP-chained candidate
+            // goes FIRST — the user's own device proves that architecture
+            // connects fast on Iranian ISPs (Aether's "Aether → Psiphon"),
+            // while direct Psiphon fronting can burn the whole boot cap.
+            // Tor keeps its store order: direct Tor is the user-verified path.
+            val ordered = if (exclusiveFamily == PSIPHON_SOURCE) {
+                family.sortedBy { if (it.transport == PSIPHON_TRANSPORT) 1 else 0 }
+            } else {
+                family
+            }
+            return ordered.take(maxCandidates)
         }
 
         // gool profiles only ever appear when the user pinned the gool method

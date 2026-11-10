@@ -74,6 +74,15 @@ import java.util.Base64
  * caught it because there the cwd happened to be writable.) Fix: pass
  * DataRootDirectory = an app-private writable directory; also drop the
  * deprecated field and probe writability up front with a clear error.
+ *
+ * v1.6.4 — after the datastore fix the core boots but the TUNNEL may never
+ * establish on hostile ISPs, and the user only saw a silent ticking clock:
+ *  - live progress: notable core notices (API reached, server list loaded,
+ *    session opening, exit region) surface in the boot ticks, mirroring
+ *    TorEngine.lastProgressLabel();
+ *  - a hard EgressRegion that never connects gets ONE automatic retry with
+ *    the region filter off — the same fallback the exit-country picker
+ *    promises and Aether implements (the user's proven-working reference).
  */
 object PsiphonEngine {
 
@@ -114,6 +123,7 @@ object PsiphonEngine {
     @Volatile private var procUpstream: Boolean = false
     @Volatile private var tunnelUp: Boolean = false
     @Volatile private var lastExitRegion: String = ""
+    @Volatile private var lastProgress: String = ""
     private val mutex = Mutex()
 
     // v1.6.2 — ring buffer of the child's RAW output (every line: JSON notices,
@@ -138,6 +148,10 @@ object PsiphonEngine {
             .filter { it.isNotEmpty() }
         return if (lines.isEmpty()) "" else " — output: ${lines.joinToString(" | ")}"
     }
+
+    /** Human-readable boot progress for the tick log lines (mirrors TorEngine). */
+    fun lastProgressLabel(): String =
+        lastProgress.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""
 
     val isRunning: Boolean get() = proc != null
 
@@ -214,9 +228,13 @@ object PsiphonEngine {
         cfg.writeText(buildConfig(upstream, dataRoot.absolutePath, region))
 
         var attempt = 0
+        var wipedOnce = false
+        val regionActive = region.isNotBlank() && region != "auto"
+        var regionRetried = false
         while (true) {
             attempt++
             outputTail.clear()
+            lastProgress = ""
             val started = try {
                 ProcessBuilder(bin.absolutePath, "-config", cfg.absolutePath)
                     .redirectErrorStream(true)
@@ -246,12 +264,16 @@ object PsiphonEngine {
                                 "Tunnels" -> {
                                     val count = obj["data"]?.jsonObject
                                         ?.get("count")?.jsonPrimitive?.intOrNull ?: 0
-                                    if (count >= 1) tunnelUp = true
+                                    if (count >= 1) {
+                                        tunnelUp = true
+                                        lastProgress = "tunnel up"
+                                    }
                                 }
                                 "ConnectedServerRegion" -> {
                                     val regionName = obj["data"]?.jsonObject
                                         ?.get("serverRegion")?.jsonPrimitive?.content ?: "?"
                                     lastExitRegion = regionName
+                                    lastProgress = "exit: $regionName"
                                     app.kukuvpn.bg.ServiceBridge.log(
                                         "INFO", "psiphon exit region: $regionName"
                                     )
@@ -261,9 +283,19 @@ object PsiphonEngine {
                                         ?.get("regions")?.jsonArray
                                         ?.map { it.jsonPrimitive.content } ?: emptyList()
                                     if (regions.isNotEmpty()) {
+                                        lastProgress = "server list · ${regions.size} regions"
                                         app.kukuvpn.bg.ServiceBridge.log(
                                             "INFO", "psiphon egress regions now: ${regions.joinToString(",")}"
                                         )
+                                    }
+                                }
+                                "ServerTimestamp" -> lastProgress = "psiphon API reached"
+                                "TrafficRateLimits" -> lastProgress = "tunnel session opening"
+                                "ClientRegion" -> {
+                                    val clientRegion = obj["data"]?.jsonObject
+                                        ?.get("region")?.jsonPrimitive?.content
+                                    if (!clientRegion.isNullOrBlank()) {
+                                        lastProgress = "network location: $clientRegion"
                                     }
                                 }
                                 else -> Unit
@@ -312,7 +344,8 @@ object PsiphonEngine {
             // bolt/ledger lock from a hard-killed previous core). Wipe it and
             // give the core ONE clean retry before reporting failure.
             val earlyDeath = failure?.message?.contains("exited immediately") == true
-            if (earlyDeath && attempt == 1) {
+            if (earlyDeath && !wipedOnce) {
+                wipedOnce = true
                 stopInternal()
                 app.kukuvpn.bg.ServiceBridge.log(
                     "WARN",
@@ -320,6 +353,20 @@ object PsiphonEngine {
                 )
                 dataRoot.deleteRecursively()
                 dataRoot.mkdirs()
+                continue
+            }
+            // v1.6.4: a hard exit-country filter that never connects gets ONE
+            // automatic retry without it — exactly what the exit-country
+            // picker promises and what Aether (the user's working reference)
+            // does. Never silent: this line names the dropped filter.
+            if (regionActive && !regionRetried) {
+                regionRetried = true
+                stopInternal()
+                app.kukuvpn.bg.ServiceBridge.log(
+                    "WARN",
+                    "psiphon: exit-country $region did not connect — retrying once with auto exit"
+                )
+                cfg.writeText(buildConfig(upstream, dataRoot.absolutePath, ""))
                 continue
             }
             stopInternal()

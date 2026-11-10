@@ -359,7 +359,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         this,
                         upstream = chained,
                         region = settings.psiphonRegion,
-                        onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s") },
+                        onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s${PsiphonEngine.lastProgressLabel()}") },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",

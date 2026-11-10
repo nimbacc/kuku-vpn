@@ -174,6 +174,7 @@
     <string name="about_github_hint">Source code, issues and new releases</string>
     <string name="about_changes">Recent changes</string>
     <string name="about_change_141">1.4.1 — About page: version, engine and GitHub link</string>
+    <string name="about_change_164">1.6.4 — Psiphon now tries the WARP-chained path first (the same architecture you proved works on your ISP via Aether), a failing exit country automatically retries once with auto exit, and boot ticks show live progress: API reached · server list · session opening · exit region</string>
     <string name="about_change_163">1.6.3 — Fixed the Psiphon instant death: the core tried to create its data directory in a read-only place on Android and died before any connection — the 1.6.2 diagnostics exposed the cause; the core now uses the app\'s private storage properly, and you get a clear error if device storage is not writable</string>
     <string name="about_change_162">1.6.2 — Psiphon crash diagnosis: the core\'s real output is now shown on failure, stale leftover processes are killed before start, and a clean-data-store retry runs automatically</string>
     <string name="about_change_161">1.6.1 — No more automatic WARP fallback: when Psiphon or Tor fails (pinned on the Connection page or picked in Profiles), Kuku shows the real error and stays offline instead of quietly connecting through WARP</string>
