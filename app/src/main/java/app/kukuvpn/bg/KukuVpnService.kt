@@ -50,6 +50,8 @@ import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,6 +65,8 @@ import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.InterfaceAddress
 import java.net.NetworkInterface as JNetworkInterface
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -638,7 +642,8 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
     /**
      * v1.6.5 — the chained candidates' underlay, with the WIRE as its own
      * choice (the Aether split the user drew: "Network backend" ≠ "Protocol"):
-     *  - "wg"     → the REAL WireGuard sidecar only;
+     *  - "wg"     → the REAL WireGuard sidecar only — a failure fails HONESTLY,
+     *    it never switches wires behind the user's back;
      *  - "masque" → the MASQUE engine only (the pre-1.6.5 behavior);
      *  - "smart"  → WireGuard sidecar FIRST (the user's device proves that
      *    wire connects the chain on their ISP via Aether), MASQUE fallback.
@@ -646,6 +651,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
      * (2086 sidecar / 2085 MASQUE engine).
      */
     private suspend fun bootChainedUnderlay(label: String): Int {
+        // v1.6.6 FIX (the 1.6.5 field report): the sidecar is usually the
+        // FIRST libbox user in a session. Without Setup, libbox's package-level
+        // working path is empty and its always-on cache-file service opens
+        // "cache.db" RELATIVE to the process cwd — on Android the read-only
+        // "/" — so every chained boot died with "initialize cache-file: open
+        // cache.db: read-only file system". startCore() always called
+        // ensureLibbox(); this path never did. Sandbox-proven both ways with
+        // the real libbox v1.11.15: without Setup → "initialize cache-file:
+        // open cache.db: permission denied"; with Setup (this exact recipe) →
+        // clean start + cache.db lands inside WorkingPath.
+        ensureLibbox()
         val wire = settings.underlayWire
         if (wire != "masque") {
             val wgCandidates = FallbackEngine.wireguardUnderlayCandidates(profileStore)
@@ -662,6 +678,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
+                    if (wire == "wg") {
+                        // WireGuard-only honors the selection: an honest error
+                        // beats a silent wire switch (the 1.6.1 honesty rule)
+                        throw e
+                    }
                     ServiceBridge.log(
                         "WARN",
                         "WireGuard underlay failed for $label: ${e.message} — " +
@@ -669,6 +690,12 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     )
                 }
             } else {
+                if (wire == "wg") {
+                    error(
+                        "no WireGuard profile registered yet — connect WARP once " +
+                            "to mint WireGuard identities for the underlay"
+                    )
+                }
                 ServiceBridge.log(
                     "WARN",
                     "no WireGuard profile registered yet for the $label underlay — " +
@@ -677,6 +704,13 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             }
         }
         if (WgSidecar.isRunning) WgSidecar.stop()
+        // v1.6.6: a warm engine is only as good as its egress. The 1.6.5 field
+        // report: a warm MASQUE engine with a dead egress stalled the psiphon
+        // boot for 3+ minutes with zero progress lines. Probe the wire with a
+        // REAL request BEFORE pointing the child core at it; a dead warm
+        // engine gets exactly one cold re-sweep, then the attempt fails fast
+        // and visibly instead of hanging.
+        var probed = false
         if (!WarpMasqueEngine.isRunning()) {
             ServiceBridge.log("INFO", "booting WARP (MASQUE) underlay for $label (scan: ${settings.scanMode})")
             WarpMasqueEngine.boot(
@@ -684,8 +718,46 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                 scanMode = settings.scanMode,
                 onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
             ).getOrThrow()
+        } else {
+            probed = egressAlive(WarpMasqueEngine.SOCKS_PORT)
+            if (!probed) {
+                ServiceBridge.log(
+                    "WARN",
+                    "warm MASQUE engine failed the egress probe — tearing it down and re-sweeping once"
+                )
+                WarpMasqueEngine.stop()
+                WarpMasqueEngine.boot(
+                    this,
+                    scanMode = settings.scanMode,
+                    onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+                ).getOrThrow()
+            }
+        }
+        if (!probed && !egressAlive(WarpMasqueEngine.SOCKS_PORT)) {
+            error(
+                "MASQUE engine egress is dead (real-request probe failed) — " +
+                    "this wire is not usable on this network"
+            )
         }
         return WarpMasqueEngine.SOCKS_PORT
+    }
+
+    /**
+     * v1.6.6 — push a REAL request through an underlay's local SOCKS. A
+     * listener without a working exit must fail HERE (fast, with a clear
+     * log line), never inside the child core's boot where it masquerades as
+     * a psiphon/tor failure. Same pattern WgSidecar already proves on boot.
+     */
+    private suspend fun egressAlive(port: Int): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            OkHttpClient.Builder()
+                .connectTimeout(5, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .proxy(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+                .build()
+                .newCall(Request.Builder().url("https://www.cloudflare.com/cdn-cgi/trace").build())
+                .execute().use { it.isSuccessful }
+        }.getOrDefault(false)
     }
 
     private fun fail(message: String) {

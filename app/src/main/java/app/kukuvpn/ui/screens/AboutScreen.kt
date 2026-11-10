@@ -92,6 +92,7 @@ fun AboutScreen(onBack: () -> Unit) {
         Card {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(stringResource(R.string.about_changes), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.about_change_166), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.about_change_165), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.about_change_164), style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.about_change_163), style = MaterialTheme.typography.bodySmall)
