@@ -1,5 +1,6 @@
 package app.kukuvpn.core.warp
 
+import app.kukuvpn.bg.ServiceBridge
 import app.kukuvpn.core.config.OutboundFactory
 import app.kukuvpn.data.Profile
 import io.nekohasekai.libbox.BoxService
@@ -55,16 +56,45 @@ object WgSidecar {
      * Boots the sidecar over the first [candidates] profile that works.
      * Returns the winning profile, so the caller can log WHICH identity
      * carries the underlay.
+     *
+     * v1.7.2 ENDPOINT SWEEP: the sidecar used to try each candidate's fixed
+     * registered endpoint only — but Iranian ISPs block 162.159.x anycast
+     * IPs SELECTIVELY (the v1.0.2 discovery), so the WG underlay died on an
+     * endpoint another one would carry. The plain-WARP WG path has swept
+     * every anycast IP since v1.2.5; the sidecar now does the same with
+     * [endpointPool] (host first, then the pool), which is exactly what the
+     * Aether comparison showed: WG DOES carry the chain on this ISP — on the
+     * right endpoint. A dead endpoint costs ≤8s (probe call timeout).
      */
-    suspend fun boot(platform: PlatformInterface, candidates: List<Profile>): Result<Profile> =
+    suspend fun boot(
+        platform: PlatformInterface,
+        candidates: List<Profile>,
+        endpointPool: List<String> = emptyList(),
+        endpointsPerCandidate: Int = 5,
+    ): Result<Profile> =
         mutex.withLock {
             stopInternal()
             var lastErr: Exception? = null
+            var tries = 0
             for (candidate in candidates.take(2)) {
-                val started = bootOne(platform, candidate)
-                if (started.isSuccess) return@withLock Result.success(candidate)
-                lastErr = started.exceptionOrNull() as? Exception
-                stopInternal() // partial boot — deterministic teardown, next candidate
+                val endpoints = (listOf(candidate.host) + endpointPool).distinct().take(endpointsPerCandidate)
+                for (ep in endpoints) {
+                    tries++
+                    val test = if (ep == candidate.host) candidate else candidate.copy(host = ep)
+                    val started = bootOne(platform, test)
+                    if (started.isSuccess) {
+                        if (ep != candidate.host) {
+                            ServiceBridge.log(
+                                "INFO",
+                                "WireGuard underlay: registered endpoint was dead — " +
+                                    "sweep found a working one ($ep) on attempt $tries"
+                            )
+                        }
+                        return@withLock Result.success(test)
+                    }
+                    lastErr = started.exceptionOrNull() as? Exception
+                    stopInternal() // partial boot — deterministic teardown, next endpoint
+                }
             }
             Result.failure(
                 lastErr ?: IllegalStateException("no usable WireGuard profile for the underlay")
@@ -111,9 +141,12 @@ object WgSidecar {
                 // fallback), never inside the psiphon boot where it would
                 // masquerade as a psiphon failure. The mixed inbound speaks
                 // HTTP CONNECT too — push an actual request through.
+                // v1.7.2: callTimeout 8s caps a dead endpoint (handshake
+                // blackholed → the DoH through the dead WG stalls) at 8s.
                 val probe = OkHttpClient.Builder()
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(10, TimeUnit.SECONDS)
+                    .callTimeout(8, TimeUnit.SECONDS)
                     .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SOCKS_PORT)))
                     .build()
                 probe.newCall(

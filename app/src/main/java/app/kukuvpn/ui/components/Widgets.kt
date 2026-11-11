@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.kukuvpn.R
 import app.kukuvpn.bg.TunnelStage
@@ -122,6 +123,10 @@ fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.titleMedium,
                 fontFamily = FontFamily.Monospace,
                 maxLines = 1,
+                // v1.7.2: “🇩🇪 104.28.x.x” was CLIPPED at one tile width — the
+                // user saw the flag with no address. Ellipsis is the honest
+                // fallback; the exit tile also got extra width on Home.
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

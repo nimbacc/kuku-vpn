@@ -69,7 +69,10 @@ object ConnectionVerifier {
                     ).execute().use { resp ->
                         if (probe.expect204 && resp.code == 204) {
                             val latency = System.currentTimeMillis() - started
-                            return Verdict(true, exitIp = fetchExitIp(proxy), latencyMs = latency)
+                            // v1.7.2: the exit IP/country resolve ASYNC in the
+                            // service after ACTIVE — no extra network on the
+                            // verdict path, "Connected" shows instantly
+                            return Verdict(true, latencyMs = latency)
                         }
                         if (!probe.expect204 && resp.code == 200) {
                             val text = resp.body?.string() ?: ""
@@ -140,8 +143,8 @@ object ConnectionVerifier {
                 Request.Builder().url(PROBES[0].url).build()
             ).execute().use { resp ->
                 if (resp.code == 204) {
-                    val (ip, country) = fetchExitInfo(proxy)
-                    Verdict(true, ip, country, System.currentTimeMillis() - started)
+                    // v1.7.2: exit info resolves ASYNC after ACTIVE (see verify)
+                    Verdict(true, latencyMs = System.currentTimeMillis() - started)
                 } else {
                     Verdict(false, reason = "probe ${resp.code} ${PROBES[0].url.removePrefix("https://").substringBefore('/')}$attemptTag")
                 }
@@ -151,17 +154,54 @@ object ConnectionVerifier {
         }
     }
 
-    private fun fetchExitIp(proxy: Proxy): String = fetchExitInfo(proxy).first
 
-    /** v1.7.0: ip + country in one request (the trace carries "ip=…" and "loc=…"). */
-    fun fetchExitInfo(proxy: Proxy): Pair<String, String> = runCatching {
-        probeClient.newBuilder().proxy(proxy).build().newCall(
-            Request.Builder().url("https://1.1.1.1/cdn-cgi/trace").build()
-        ).execute().use { resp ->
-            val lines = resp.body?.string()?.lineSequence() ?: emptySequence()
-            val ip = lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=") ?: ""
-            val country = lines.firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=") ?: ""
-            ip to country
+    /**
+     * v1.7.2: ip + country through a SOURCE CHAIN. The single 1.1.1.1 trace
+     * was blind on some exits — Cloudflare serves cdn-cgi to a Tor exit with
+     * a challenge (no ip= line at all), which is exactly the user's report
+     * ("Tor connects but the IP field is empty"). Chain:
+     *   1. https://1.1.1.1/cdn-cgi/trace          → ip= + loc=
+     *   2. https://www.cloudflare.com/cdn-cgi/trace → ip= + loc= (different edge path)
+     *   3. https://check.torproject.org/api/ip    → {"IP":"…","IsTor":true} — Tor-friendly, IP only
+     *   4. country only: https://ipwho.is/        → "country_code":"XX" (when steps 1-3 gave an IP but no loc)
+     * Never throws; blank-blank means "no source answered".
+     */
+    fun fetchExitInfo(proxy: Proxy): Pair<String, String> {
+        val client = probeClient.newBuilder().proxy(proxy).build()
+        for (url in listOf(
+            "https://1.1.1.1/cdn-cgi/trace",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+        )) {
+            val (ip, loc) = runCatching {
+                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching "" to ""
+                    val lines = resp.body?.string()?.lineSequence() ?: emptySequence()
+                    val ip = lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=") ?: ""
+                    val loc = lines.firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=") ?: ""
+                    ip to loc
+                }
+            }.getOrDefault("" to "")
+            if (ip.isNotBlank()) return ip to loc
         }
-    }.getOrDefault("" to "")
+        // Tor-friendly source: the Tor Project's own check API answers from
+        // Tor exits where Cloudflare will not.
+        val torIp = runCatching {
+            client.newCall(Request.Builder().url("https://check.torproject.org/api/ip").build())
+                .execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching ""
+                    Regex("\"IP\"\\s*:\\s*\"([^\"]+)\"").find(resp.body?.string() ?: "")
+                        ?.groupValues?.get(1) ?: ""
+                }
+        }.getOrDefault("")
+        if (torIp.isBlank()) return "" to ""
+        // best-effort country for the flag — failure costs the flag, not the IP
+        val cc = runCatching {
+            client.newCall(Request.Builder().url("https://ipwho.is/").build()).execute().use { resp ->
+                if (!resp.isSuccessful) return@runCatching ""
+                Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(resp.body?.string() ?: "")
+                    ?.groupValues?.get(1) ?: ""
+            }
+        }.getOrDefault("")
+        return torIp to cc
+    }
 }

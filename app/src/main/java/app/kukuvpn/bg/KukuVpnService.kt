@@ -62,6 +62,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -170,6 +171,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             ACTION_STOP -> scope.launch {
                 // flip the UI first — teardown (core close + engine stop) can
                 // take seconds and the button must answer instantly
+                sessionEpoch++ // v1.7.2: invalidate any pending auto-reconnect bounce
                 ServiceBridge.state.value = TunnelState.OFF
                 stopTunnel(clean = true)
             }
@@ -185,6 +187,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
     override fun onRevoke() {
         // VPN permission revoked or another VPN took over — tear everything down
+        sessionEpoch++ // v1.7.2: invalidate any pending auto-reconnect bounce
         scope.launch { stopTunnel(clean = true) }
         super.onRevoke()
     }
@@ -543,6 +546,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         ongoing = true,
                     )
                     startNotifSpeedLoop()
+                    // v1.7.2: exit IP/country resolve in the BACKGROUND (the
+                    // verdict no longer blocks on it — "Connected" shows
+                    // instantly; the tile + notification fill in after)
+                    resolveExitInfoInBackground(verdict.exitIp)
+                    // v1.7.2: auto-reconnect when the UNDERLYING network
+                    // switches (Wi-Fi ↔ data) — the wiring memory leads with
+                    // the wire that last verified on the NEW network class
+                    startNetworkWatch()
                     // v1.7.1: rule-set downloads happen HERE — through the LIVE
                     // tunnel, in the background, never on the connect path (the
                     // v1.7.0 synchronous fetch inside startCore stalled every
@@ -804,7 +815,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             if (WgSidecar.isRunning) return Underlay(WgSidecar.SOCKS_PORT, "wg")
             if (wgCandidates.isNotEmpty()) {
                 try {
-                    val winner = WgSidecar.boot(this, wgCandidates).getOrThrow()
+                    // v1.7.2: the sidecar now SWEEPS the anycast pool like the
+                    // plain-WARP WG path — the registered endpoint is often the
+                    // blocked one while a sibling anycast IP carries the wire
+                    val winner = WgSidecar.boot(this, wgCandidates, WARP_ENDPOINT_IPS).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
                         "WireGuard underlay up for $label (profile \"${winner.name}\", " +
@@ -1356,6 +1370,83 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         "\n▼ ${formatSpeed(dIn)} · ▴ ${formatSpeed(dOut)}",
                     force = true,
                 )
+            }
+        }
+    }
+
+    /* ------------------ v1.7.2 exit info + auto-reconnect ------------------ */
+
+    /** One epoch per user-visible session; a user stop invalidates pending bounces. */
+    @Volatile private var sessionEpoch = 0L
+    private var networkWatchJob: Job? = null
+
+    /**
+     * The verdict path no longer resolves the exit IP (v1.7.2) — do it here,
+     * in the background, so the tile and notification fill in ~1-3s after
+     * "Connected" without ever delaying the connect itself.
+     */
+    private fun resolveExitInfoInBackground(knownIp: String) {
+        if (knownIp.isNotBlank()) return // the 200-trace probe already carried both
+        scope.launch {
+            val proxy = java.net.Proxy(
+                java.net.Proxy.Type.HTTP,
+                java.net.InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT),
+            )
+            val (ip, cc) = ConnectionVerifier.fetchExitInfo(proxy)
+            if (ip.isBlank() || ServiceBridge.state.value != TunnelState.ACTIVE) return@launch
+            ServiceBridge.exitIp.value = ip
+            ServiceBridge.exitCountry.value = cc
+            val flag = flagOf(cc)
+            notifBaseText = getString(R.string.notif_active) +
+                " · $ip" + (if (flag.isNotBlank()) " $flag" else "")
+            updateNotif(notifBaseText, force = true)
+            ServiceBridge.log("INFO", "exit resolved: $ip ${cc.ifBlank { "?" }}")
+        }
+    }
+
+    private fun currentNetworkId(): String? =
+        bestUnderlyingNetwork()?.networkHandle?.toString()
+
+    private fun networkLabel(): String = when (currentNetworkClass()) {
+        FallbackEngine.NETWORK_WIFI -> "Wi-Fi"
+        FallbackEngine.NETWORK_CELL -> "data"
+        else -> "network"
+    }
+
+    /**
+     * v1.7.2 AUTO-RECONNECT (the user's ask): while ACTIVE, watch the
+     * UNDERLYING default network (never the tun — bestUnderlyingNetwork
+     * filters TRANSPORT_VPN). A Wi-Fi ↔ data switch tears the session down
+     * and re-runs the full chain; the wiring memory is kept PER NETWORK
+     * CLASS, so the bounce leads with the wire that last verified on the
+     * NEW network — effectively "auto-pick the best method" across Wi-Fi
+     * and data without the user touching anything.
+     */
+    private fun startNetworkWatch() {
+        val epoch = sessionEpoch
+        networkWatchJob?.cancel()
+        networkWatchJob = scope.launch {
+            var last = currentNetworkId()
+            var lastLabel = networkLabel()
+            while (ServiceBridge.state.value == TunnelState.ACTIVE && !stopping.get() && epoch == sessionEpoch) {
+                delay(2500)
+                val now = currentNetworkId() ?: continue
+                if (last == null) {
+                    last = now; lastLabel = networkLabel(); continue
+                }
+                if (now != last) {
+                    ServiceBridge.log("INFO", "network changed ($lastLabel → ${networkLabel()}) — auto-reconnect")
+                    if (epoch != sessionEpoch || stopping.get()) return@launch
+                    // THIS coroutine is the watcher — clear the field so the
+                    // new session's startNetworkWatch() does not cancel the
+                    // job that is currently executing the bounce
+                    networkWatchJob = null
+                    stopTunnel(clean = false)
+                    if (epoch != sessionEpoch || stopping.get()) return@launch // user stopped meanwhile
+                    settings = settingsStore.snapshot()
+                    runTunnel()
+                    return@launch
+                }
             }
         }
     }

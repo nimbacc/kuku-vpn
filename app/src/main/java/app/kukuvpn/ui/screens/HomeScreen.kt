@@ -186,12 +186,64 @@ fun HomeScreen() {
         androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile(stringResource(R.string.stats_uptime), formatUptime(stats.uptimeSec), Modifier.weight(1f))
             // v1.7.0: the exit country flag rides in FRONT of the IP (🇩🇪 104.28.x)
+            // v1.7.2: the exit tile gets DOUBLE width — flag + address must both
+            // be visible in every mode (the user saw only the flag: the IP was
+            // clipped, not missing). Exit info also resolves async now (v1.7.2),
+            // so a still-resolving exit shows “…” briefly, then the address.
             val flag = flagOf(exitCountry)
-            StatTile(stringResource(R.string.stats_exit), (if (flag.isNotBlank()) "$flag " else "") + exitIp.ifBlank { "—" }, Modifier.weight(1f))
+            val exitValue = when {
+                exitIp.isNotBlank() -> (if (flag.isNotBlank()) "$flag " else "") + exitIp
+                state == TunnelState.ACTIVE -> (if (flag.isNotBlank()) "$flag " else "") + "…"
+                else -> "—"
+            }
+            StatTile(stringResource(R.string.stats_exit), exitValue, Modifier.weight(2f))
         }
 
         // v1.7.0 redesigned chart — titled, with a live legend (see TrafficChart)
         TrafficChart(downSamples.toList(), upSamples.toList(), state == TunnelState.ACTIVE, Modifier.fillMaxWidth())
+
+        // v1.7.2: one-tap speed test of the ACTIVE method — real down/up/latency
+        // measured THROUGH the tunnel (the user's "تست سرعت هر روش"). Works for
+        // every method alike: WARP, gool, Kuku→Psiphon, Kuku→Tor.
+        val speedState = remember { mutableStateOf<app.kukuvpn.core.speed.SpeedTester.Result?>(null) }
+        var speedTesting by remember { mutableStateOf(false) }
+        androidx.compose.foundation.layout.Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            androidx.compose.material3.TextButton(
+                onClick = {
+                    if (!speedTesting) {
+                        speedTesting = true
+                        speedState.value = null
+                        scope.launch {
+                            speedState.value = app.kukuvpn.core.speed.SpeedTester.run()
+                            speedTesting = false
+                        }
+                    }
+                },
+                enabled = state == TunnelState.ACTIVE && !speedTesting,
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+            ) {
+                Text(
+                    if (speedTesting) stringResource(R.string.speedtest_running)
+                    else stringResource(R.string.speedtest_run),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+            val res = speedState.value
+            Text(
+                when {
+                    res == null -> ""
+                    res.error != null -> stringResource(R.string.speedtest_failed, res.error)
+                    else -> app.kukuvpn.core.speed.SpeedTester.format(res)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
 
         // v1.7.0: the VPN / proxy switch moved to Settings → "Device mode"
         // (with a plain-language explanation) — on Home it just confused.
