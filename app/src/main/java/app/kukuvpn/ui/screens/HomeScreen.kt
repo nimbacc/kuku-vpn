@@ -36,6 +36,7 @@ import app.kukuvpn.bg.TunnelStage
 import app.kukuvpn.bg.TunnelState
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.core.warp.WarpSetup
+import app.kukuvpn.core.speed.SpeedTester
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.ui.components.StatTile
 import app.kukuvpn.ui.components.StageBar
@@ -205,7 +206,7 @@ fun HomeScreen() {
         // v1.7.2: one-tap speed test of the ACTIVE method — real down/up/latency
         // measured THROUGH the tunnel (the user's "تست سرعت هر روش"). Works for
         // every method alike: WARP, gool, Kuku→Psiphon, Kuku→Tor.
-        val speedState = remember { mutableStateOf<app.kukuvpn.core.speed.SpeedTester.Result?>(null) }
+        val speedState = remember { mutableStateOf<SpeedTester.Result?>(null) }
         var speedTesting by remember { mutableStateOf(false) }
         androidx.compose.foundation.layout.Row(
             Modifier.fillMaxWidth(),
@@ -218,7 +219,7 @@ fun HomeScreen() {
                         speedTesting = true
                         speedState.value = null
                         scope.launch {
-                            speedState.value = app.kukuvpn.core.speed.SpeedTester.run()
+                            speedState.value = SpeedTester.run()
                             speedTesting = false
                         }
                     }
@@ -237,7 +238,7 @@ fun HomeScreen() {
                 when {
                     res == null -> ""
                     res.error != null -> stringResource(R.string.speedtest_failed, res.error)
-                    else -> app.kukuvpn.core.speed.SpeedTester.format(res)
+                    else -> SpeedTester.format(res)
                 },
                 style = MaterialTheme.typography.labelSmall,
                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
