@@ -270,21 +270,33 @@ jobs:
           name: tor
           path: app/src/main/jniLibs
 
-      # v1.6.0: refresh the Tor "auto" bridge lists from the scriptzteam
-      # collector at build time — every APK carries bridges fresh enough to
-      # survive a censor sweep. On ANY fetch failure the committed snapshot
-      # in app/src/main/assets ships instead (never an empty list).
-      - name: refresh tor bridge snapshot (best-effort)
+      # v1.6.9 — the Tor bridge snapshot is now LIVENESS-TESTED at build time.
+      # (v1.6.0–v1.6.8 shipped slices of the scriptzteam dump; that collector
+      # STOPPED UPDATING on 2026-07-29 and only ~11% of its July obfs4 lines
+      # still accept TCP — dead bridges were the tor "never connects" decay.)
+      # Now: official moat lines (fresh) FIRST, then a RANDOM slice of the
+      # collector lines that still accept TCP, garbage IPs filtered. The
+      # snowflake asset is builtin and untouched. The app repeats the same
+      # TCP test on-device before every tor boot (TorEngine v1.6.9).
+      - name: refresh tor bridge snapshot (liveness-tested)
         run: |
           ok=0
-          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-obfs4.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-obfs4 && ok=1
-          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-webtunnel.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-webtunnel && ok=$((ok+1))
-          if [ "$ok" = "2" ]; then
-            python3 scripts/bridge_sample.py /tmp/bridges-obfs4.txt /tmp/bridges-webtunnel.txt app/src/main/assets
-          else
-            echo "::warning::bridge collector unreachable — shipping the committed snapshot"
+          curl -sfL --retry 2 --max-time 60 -A "Mozilla/5.0" -o /tmp/moat-obfs4.html "https://bridges.torproject.org/bridges?transport=obfs4" && ok=$((ok+1)) || true
+          sleep 5
+          curl -sfL --retry 2 --max-time 60 -A "Mozilla/5.0" -o /tmp/moat-webtunnel.html "https://bridges.torproject.org/bridges?transport=webtunnel" && ok=$((ok+1)) || true
+          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-obfs4.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-obfs4 || true
+          curl -sfL --retry 2 --max-time 60 -o /tmp/bridges-webtunnel.txt https://raw.githubusercontent.com/scriptzteam/Tor-Bridges-Collector/main/bridges-webtunnel || true
+          echo "sources: moat=$ok/2 collector-obfs4=$( [ -s /tmp/bridges-obfs4.txt ] && wc -l < /tmp/bridges-obfs4.txt || echo 0) collector-webtunnel=$( [ -s /tmp/bridges-webtunnel.txt ] && wc -l < /tmp/bridges-webtunnel.txt || echo 0)"
+          # exit 3 = every source failed AND produced zero alive lines — keep
+          # the committed (itself liveness-tested) snapshot; the app re-tests
+          # on-device and can fetch fresh lines through WARP at boot anyway
+          if ! python3 scripts/bridge_sample.py app/src/main/assets \
+              --moat-obfs4 /tmp/moat-obfs4.html --moat-webtunnel /tmp/moat-webtunnel.html \
+              --stz-obfs4 /tmp/bridges-obfs4.txt --stz-webtunnel /tmp/bridges-webtunnel.txt; then
+            echo "::warning::zero alive bridges from all sources — shipping the committed snapshot"
+            git checkout -- app/src/main/assets/tor_bridges_obfs4.txt app/src/main/assets/tor_bridges_webtunnel.txt
           fi
-          wc -l app/src/main/assets/tor_bridges_obfs4.txt app/src/main/assets/tor_bridges_webtunnel.txt
+          grep -cv '^#' app/src/main/assets/tor_bridges_obfs4.txt app/src/main/assets/tor_bridges_webtunnel.txt || true
 
       - name: security guard — no signing material in git (RIX-style hygiene)
         run: |

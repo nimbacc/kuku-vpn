@@ -13,8 +13,8 @@ android {
         applicationId = "app.kukuvpn"
         minSdk = 24
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.6.8"
+        versionCode = 27
+        versionName = "1.6.9"
         resourceConfigurations += listOf("en", "fa")
     }
 
