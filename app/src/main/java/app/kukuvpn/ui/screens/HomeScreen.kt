@@ -17,7 +17,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -44,6 +43,7 @@ import app.kukuvpn.data.AppSettings
 import app.kukuvpn.ui.components.StatTile
 import app.kukuvpn.ui.components.StageBar
 import app.kukuvpn.ui.components.TrafficChart
+import app.kukuvpn.ui.components.flagOf
 import app.kukuvpn.ui.components.formatBytes
 import app.kukuvpn.ui.components.formatUptime
 import kotlinx.coroutines.delay
@@ -59,6 +59,7 @@ fun HomeScreen() {
     val stages by ServiceBridge.stages.collectAsState()
     val stats by ServiceBridge.stats.collectAsState()
     val exitIp by ServiceBridge.exitIp.collectAsState()
+    val exitCountry by ServiceBridge.exitCountry.collectAsState()
     val activeProfile by ServiceBridge.activeProfile.collectAsState()
     val scope = rememberCoroutineScope()
     val lastError by ServiceBridge.lastError.collectAsState()
@@ -183,24 +184,16 @@ fun HomeScreen() {
         }
         androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StatTile(stringResource(R.string.stats_uptime), formatUptime(stats.uptimeSec), Modifier.weight(1f))
-            StatTile(stringResource(R.string.stats_exit), exitIp.ifBlank { "—" }, Modifier.weight(1f))
+            // v1.7.0: the exit country flag rides in FRONT of the IP (🇩🇪 104.28.x)
+            val flag = flagOf(exitCountry)
+            StatTile(stringResource(R.string.stats_exit), (if (flag.isNotBlank()) "$flag " else "") + exitIp.ifBlank { "—" }, Modifier.weight(1f))
         }
 
-        TrafficChart(downSamples.toList(), upSamples.toList(), Modifier.fillMaxWidth())
+        // v1.7.0 redesigned chart — titled, with a live legend (see TrafficChart)
+        TrafficChart(downSamples.toList(), upSamples.toList(), state == TunnelState.ACTIVE, Modifier.fillMaxWidth())
 
-        // ---- mode switch ----
-        androidx.compose.foundation.layout.Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
-                onClick = { scope.launch { app.settingsStore.setVpnMode(true) } },
-                enabled = !settings.vpnMode && state == TunnelState.OFF,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.mode_vpn)) }
-            OutlinedButton(
-                onClick = { scope.launch { app.settingsStore.setVpnMode(false) } },
-                enabled = settings.vpnMode && state == TunnelState.OFF,
-                modifier = Modifier.weight(1f),
-            ) { Text(stringResource(R.string.mode_proxy)) }
-        }
+        // v1.7.0: the VPN / proxy switch moved to Settings → "Device mode"
+        // (with a plain-language explanation) — on Home it just confused.
 
         if (profiles.isEmpty()) {
             Card {

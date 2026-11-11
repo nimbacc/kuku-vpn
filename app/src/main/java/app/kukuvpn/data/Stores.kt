@@ -8,6 +8,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -95,6 +96,29 @@ class ProfileStore(private val context: Context) {
     }
 
     /**
+     * v1.7.0 backup/restore: replace the whole list with the restored one.
+     * Dedupe against survivors is not needed — the payload IS the truth the
+     * user asked to restore. The selection moves to the first restored profile
+     * (or disappears when the list is empty); last-good markers reset.
+     */
+    suspend fun replaceAll(restored: List<Profile>) {
+        context.profileDataStore.edit { prefs ->
+            val merged = (prefs[ProfileKeys.LIST]?.let {
+                runCatching { json.decodeFromString<List<Profile>>(it) }.getOrNull()
+            } ?: emptyList()).associateBy { it.id } + restored.associateBy { it.id }
+            prefs[ProfileKeys.LIST] = json.encodeToString(merged.values.toList())
+            val selectedStillThere = prefs[ProfileKeys.SELECTED] in merged.keys
+            if (!selectedStillThere) {
+                val next = restored.firstOrNull()?.id
+                if (next == null) prefs.remove(ProfileKeys.SELECTED) else prefs[ProfileKeys.SELECTED] = next
+            }
+            prefs.remove(ProfileKeys.LAST_GOOD)
+            prefs.remove(ProfileKeys.LAST_GOOD_WIFI)
+            prefs.remove(ProfileKeys.LAST_GOOD_CELL)
+        }
+    }
+
+    /**
      * Bulk removal by predicate (used for migrating auto-managed WARP profiles).
      * Selection falls back to the first survivor so the UI always has a valid pick.
      */
@@ -151,6 +175,7 @@ class ProfileStore(private val context: Context) {
 
 enum class SplitMode { ALL, INCLUDE, EXCLUDE }
 
+@Serializable
 data class AppSettings(
     val theme: Int = 0,             // 0 system, 1 light, 2 dark
     val language: String = "",      // "" system, "fa", "en"
@@ -184,6 +209,21 @@ data class AppSettings(
     val torBridgeMode: String = "auto",
     // user-pasted bridge lines for torBridgeMode == "custom"
     val torCustomBridges: String = "",
+    // v1.7.0 routing: Iranian domains/IPs bypass the tunnel (fail-open — the
+    // rule files are fetched at connect time; on failure the tunnel runs
+    // WITHOUT the bypass instead of failing the connect)
+    val irBypass: Boolean = true,
+    // v1.7.0: drop known ad/tracker domains inside the tunnel (category-ads-all)
+    val adBlock: Boolean = false,
+    // v1.7.0 DoH provider: "cloudflare" | "google" | "quad9" (IP-literal URLs,
+    // no bootstrap resolution needed — same reason as the 1.2.2 bug history)
+    val dnsProvider: String = "cloudflare",
+    // v1.7.0: expose a mixed SOCKS/HTTP inbound on 0.0.0.0:2081 so other
+    // devices on the phone's hotspot/LAN can ride the tunnel
+    val lanShare: Boolean = false,
+    // v1.7.0 panic mode: on connect, override the pinned method with the full
+    // ranked smart chain + the most patient sweep
+    val emergencyMode: Boolean = false,
 )
 
 private object SettingsKeys {
@@ -209,6 +249,11 @@ private object SettingsKeys {
     // (the wiring that last VERIFIED a connect there; the Aether
     // "remembers which one worked on this network" rule for Psiphon/Tor)
     val WIRING = stringPreferencesKey("wiring_memory")
+    val IR_BYPASS = stringPreferencesKey("ir_bypass")
+    val AD_BLOCK = stringPreferencesKey("ad_block")
+    val DNS_PROVIDER = stringPreferencesKey("dns_provider")
+    val LAN_SHARE = stringPreferencesKey("lan_share")
+    val EMERGENCY_MODE = stringPreferencesKey("emergency_mode")
 }
 
 class SettingsStore(private val context: Context) {
@@ -243,6 +288,11 @@ class SettingsStore(private val context: Context) {
             psiphonRegion = p[SettingsKeys.PSIPHON_REGION] ?: "auto",
             torBridgeMode = p[SettingsKeys.TOR_BRIDGE_MODE] ?: "auto",
             torCustomBridges = p[SettingsKeys.TOR_CUSTOM_BRIDGES] ?: "",
+            irBypass = p[SettingsKeys.IR_BYPASS]?.toBooleanStrictOrNull() ?: true,
+            adBlock = p[SettingsKeys.AD_BLOCK]?.toBooleanStrictOrNull() ?: false,
+            dnsProvider = p[SettingsKeys.DNS_PROVIDER] ?: "cloudflare",
+            lanShare = p[SettingsKeys.LAN_SHARE]?.toBooleanStrictOrNull() ?: false,
+            emergencyMode = p[SettingsKeys.EMERGENCY_MODE]?.toBooleanStrictOrNull() ?: false,
         )
     }
 
@@ -283,5 +333,21 @@ class SettingsStore(private val context: Context) {
             } ?: emptyMap()
             prefs[SettingsKeys.WIRING] = json.encodeToString(cur + ("$protocol|$netClass" to wiring))
         }
+    }
+
+    suspend fun setIrBypass(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.IR_BYPASS] = v.toString() }
+    suspend fun setAdBlock(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.AD_BLOCK] = v.toString() }
+    suspend fun setDnsProvider(v: String) = context.settingsDataStore.edit { it[SettingsKeys.DNS_PROVIDER] = v }
+    suspend fun setLanShare(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.LAN_SHARE] = v.toString() }
+    suspend fun setEmergencyMode(v: Boolean) = context.settingsDataStore.edit { it[SettingsKeys.EMERGENCY_MODE] = v.toString() }
+
+    /** v1.7.0 backup restore: overwrite every persisted field from the payload. */
+    suspend fun applyBackup(s: AppSettings) {
+        setTheme(s.theme); setLanguage(s.language); setSplitMode(s.splitMode); setSplitApps(s.splitApps)
+        setKillSwitch(s.killSwitch); setAutoFallback(s.autoFallback); setSubAutoUpdate(s.subAutoUpdate)
+        setVpnMode(s.vpnMode); setProtocol(s.protocol); setNetwork(s.network); setScanMode(s.scanMode)
+        setPsiphonRegion(s.psiphonRegion); setTorBridgeMode(s.torBridgeMode); setTorCustomBridges(s.torCustomBridges)
+        setIrBypass(s.irBypass); setAdBlock(s.adBlock); setDnsProvider(s.dnsProvider)
+        setLanShare(s.lanShare); setEmergencyMode(s.emergencyMode)
     }
 }

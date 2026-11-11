@@ -45,6 +45,9 @@ object ServiceBridge {
     val stages = MutableStateFlow<Set<TunnelStage>>(emptySet())
     val stats = MutableStateFlow(SessionStats())
     val exitIp = MutableStateFlow("")
+    // v1.7.0: ISO-3166 alpha-2 of the exit (Cloudflare trace "loc="), shown as
+    // a flag emoji next to the IP on Home and in the notification
+    val exitCountry = MutableStateFlow("")
     val activeProfile = MutableStateFlow<Profile?>(null)
     val lastError = MutableStateFlow<String?>(null)
     val logs = MutableStateFlow<List<LogLine>>(emptyList())
@@ -59,6 +62,7 @@ object ServiceBridge {
         stages.value = emptySet()
         stats.value = SessionStats()
         exitIp.value = ""
+        exitCountry.value = ""
         activeProfile.value = null
         lastError.value = null
         fallbackNote.value = null

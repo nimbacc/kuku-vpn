@@ -29,6 +29,11 @@
     <string name="stats_exit">Exit IP</string>
     <string name="verify_note">"Connected" is shown only after a real request has passed through the tunnel and come back.</string>
 
+    <!-- v1.7.0 live speed chart -->
+    <string name="chart_title">Live speed</string>
+    <string name="chart_caption">Last 60 seconds · session peak %1$s/s</string>
+    <string name="chart_idle">Connect to see the live speed here — this area answers “how fast is it right now?”</string>
+
     <!-- Free WARP (auto-setup) -->
     <string name="warp_profile_name">Cloudflare WARP (Free)</string>
     <string name="warp_masque_h2_name">Cloudflare WARP (TCP fallback)</string>
@@ -151,6 +156,45 @@
     <string name="fallback_desc">If the selected profile cannot prove a real connection, ranked alternatives are tried and the successful one is remembered.</string>
     <string name="settings_sub_auto_update">Update subscriptions automatically</string>
     <string name="settings_notifications">Notifications</string>
+
+    <!-- v1.7.0 routing & DNS -->
+    <string name="settings_routing">Routing &amp; DNS</string>
+    <string name="settings_ir_bypass">Iranian sites &amp; apps bypass the tunnel</string>
+    <string name="settings_ir_bypass_desc">Banking, government and other Iranian domains/IPs connect directly (no tunnel tax, no foreign exit IP for domestic services); everything else rides the tunnel. The list is the community geosite/geoip “ir” category.</string>
+    <string name="settings_adblock">System-wide ad blocker</string>
+    <string name="settings_adblock_desc">Drops connections to known ad and tracker domains (community ads-all list) inside the tunnel — apps see fewer ads without any per-app setup.</string>
+    <string name="settings_dns">DNS (encrypted, DoH)</string>
+    <string name="dns_cloudflare">Cloudflare (1.1.1.1)</string>
+    <string name="dns_google">Google (8.8.8.8)</string>
+    <string name="dns_quad9">Quad9 (9.9.9.9)</string>
+    <string name="settings_routing_hint">If the lists cannot be downloaded on your network, the tunnel still connects — just without that rule.</string>
+
+    <!-- v1.7.0 emergency mode -->
+    <string name="settings_emergency">Emergency mode</string>
+    <string name="settings_emergency_desc">For heavy-filtering days: one switch and every connect tries the FULL ranked chain for your chosen protocol — direct first, then every underlay — with the most patient sweep. No re-pinning needed. Turn it off when things calm down.</string>
+
+    <!-- v1.7.0 device mode -->
+    <string name="settings_device_mode">Device mode</string>
+    <string name="mode_vpn_desc">Full-device VPN: ALL phone traffic goes through the tunnel. Switch it off to run a local proxy only — then apps that support SOCKS/HTTP (browsers, Telegram…) can use 127.0.0.1:2080 while nothing else is touched.</string>
+    <string name="mode_proxy_desc">Local proxy only: the phone’s traffic is NOT routed automatically; only apps you point at 127.0.0.1:2080 (SOCKS/HTTP) use the tunnel. Switch it on for a full-device VPN.</string>
+    <string name="settings_lan_share">Share the proxy on the local network</string>
+    <string name="settings_lan_share_desc">While connected, other devices on the phone’s hotspot/Wi-Fi can ride this tunnel by setting their proxy to the phone’s IP on port %1$d (SOCKS/HTTP). Only enable on a network you trust — this proxy has no password.</string>
+
+    <!-- v1.7.0 backup -->
+    <string name="settings_backup">Backup &amp; restore</string>
+    <string name="settings_backup_desc">All profiles and settings in one JSON file — export before reinstalling, restore on a new phone. The file never leaves the device unless you share it.</string>
+    <string name="backup_export">Export backup</string>
+    <string name="backup_import">Restore from backup</string>
+    <string name="backup_exported">Backup file saved</string>
+    <string name="backup_restored">Backup restored — %1$d profile(s) merged</string>
+    <string name="backup_failed">Backup failed: %1$s</string>
+
+    <!-- v1.7.0 update check -->
+    <string name="about_check_update">Check for updates</string>
+    <string name="about_update_latest">You are on the latest version</string>
+    <string name="about_update_available">New version available: %1$s — tap to open the release page</string>
+    <string name="about_update_failed">Update check failed: %1$s</string>
+    <string name="about_change_170">1.7.0 — country flag next to the exit IP, a redesigned self-explanatory speed chart, the VPN/proxy switch moved to Settings with a real explanation, a Quick Settings tile for one-tap connect, live speed in the notification, Iranian sites/apps bypass (banking apps stay direct), a system-wide ad blocker, selectable encrypted DNS, an emergency mode, proxy sharing over the local network, and backup/restore of everything</string>
 
     <!-- Logs -->
     <string name="logs_clear">Clear</string>

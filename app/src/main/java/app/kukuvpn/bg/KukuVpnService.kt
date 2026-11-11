@@ -15,6 +15,7 @@ import android.net.VpnService as AndroidVpnService
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.system.OsConstants
@@ -25,6 +26,7 @@ import app.kukuvpn.KukuApp
 import app.kukuvpn.R
 import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.core.fallback.FallbackEngine
+import app.kukuvpn.core.rules.RuleSets
 import app.kukuvpn.core.tor.TorEngine
 import app.kukuvpn.core.verify.ConnectionVerifier
 import app.kukuvpn.core.warp.WarpMasqueEngine
@@ -36,6 +38,8 @@ import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileStore
 import app.kukuvpn.data.ProfileType
 import app.kukuvpn.data.SettingsStore
+import app.kukuvpn.ui.components.flagOf
+import app.kukuvpn.ui.components.formatSpeed
 import go.Seq
 import io.nekohasekai.libbox.BoxService
 import io.nekohasekai.libbox.CommandServer
@@ -194,6 +198,18 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
         }
         stopping.set(false)
         settings = settingsStore.snapshot()
+        // v1.7.0 EMERGENCY (panic) mode: for heavy-filtering days the user
+        // should not have to re-pin anything — with the switch on, this
+        // connect uses the FULL ranked chain for the chosen protocol (direct
+        // first, then every underlay) with the most patient sweep. Announced
+        // honestly in the log; the protocol pin itself is NOT overwritten —
+        // the v1.6.1 exclusivity rule stays intact.
+        if (settings.emergencyMode &&
+            (settings.network != FallbackEngine.NET_SMART || settings.scanMode != "thorough")
+        ) {
+            settings = settings.copy(network = FallbackEngine.NET_SMART, scanMode = "thorough")
+            ServiceBridge.log("INFO", "EMERGENCY mode: full ranked chain + thorough sweep for this connect")
+        }
         // v1.6.7 Aether split: the two independent Connection-page pins.
         val protocol = settings.protocol
         val network = settings.network
@@ -324,7 +340,10 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     WarpMasqueEngine.boot(
                         this,
                         scanMode = settings.scanMode,
-                        onTick = { ms -> ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s") },
+                        onTick = { ms ->
+                            ServiceBridge.log("INFO", "engine booting… ${ms / 1000}s")
+                            notifProgress("WARP ${ms / 1000}s")
+                        },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
@@ -370,7 +389,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         this,
                         upstreamPort = underlayPort,
                         region = settings.psiphonRegion,
-                        onTick = { ms -> ServiceBridge.log("INFO", "psiphon booting… ${ms / 1000}s${PsiphonEngine.lastProgressLabel()}") },
+                        onTick = { ms ->
+                            val detail = "psiphon ${ms / 1000}s${PsiphonEngine.lastProgressLabel()}"
+                            ServiceBridge.log("INFO", "psiphon booting… $detail")
+                            notifProgress(detail)
+                        },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
@@ -421,7 +444,11 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         upstreamPort = underlayPort,
                         bridgeMode = settings.torBridgeMode,
                         customBridges = settings.torCustomBridges,
-                        onTick = { ms -> ServiceBridge.log("INFO", "tor booting… ${ms / 1000}s (bootstrap ${TorEngine.lastProgressLabel()})") },
+                        onTick = { ms ->
+                            val detail = "tor ${ms / 1000}s (bootstrap ${TorEngine.lastProgressLabel()})"
+                            ServiceBridge.log("INFO", "tor booting… $detail")
+                            notifProgress(detail)
+                        },
                     ).getOrThrow()
                     ServiceBridge.log(
                         "INFO",
@@ -480,6 +507,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     ServiceBridge.lit(TunnelStage.TUNNEL)
                     ServiceBridge.lit(TunnelStage.EXIT)
                     ServiceBridge.exitIp.value = verdict.exitIp
+                    ServiceBridge.exitCountry.value = verdict.exitCountry
                     ServiceBridge.state.value = TunnelState.ACTIVE
                     profileStore.select(candidate.id)
                     profileStore.setLastGood(candidate.id)
@@ -507,11 +535,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         )
                     }
                     ServiceBridge.startStatsClients()
+                    val flag = flagOf(verdict.exitCountry)
                     startNotif(
                         getString(R.string.notif_active) +
-                            (verdict.exitIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                            (verdict.exitIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "") +
+                            (if (flag.isNotBlank()) " $flag" else ""),
                         ongoing = true,
                     )
+                    startNotifSpeedLoop()
                     ServiceBridge.log(
                         "INFO",
                         "tunnel verified via ${attempt.host}:${attempt.port}, " +
@@ -668,7 +699,18 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             server.start()
             commandServer = server
         }
-        val config = SingBoxConfigBuilder.build(profile, settings) // JSON string
+        // v1.7.0 routing rule-sets (Iranian bypass / ad block): fetched with a
+        // jsDelivr→raw fallback and cached in filesDir/rules. Only READY files
+        // reach the config — a blocked CDN degrades the routing nicety, never
+        // the connect itself (fail-open).
+        val rules = RuleSets.ensure(this, settings)
+        if (rules.failed.isNotEmpty()) {
+            ServiceBridge.log(
+                "WARN",
+                "rule-sets unavailable this connect (routing runs without them): ${rules.failed.joinToString()}"
+            )
+        }
+        val config = SingBoxConfigBuilder.build(profile, settings, rules.ready) // JSON string
         // v1.4.0 FLUX turbo: when the engine rides, the config carries the
         // urltest group over the primary + background socks paths. Members
         // boot in the background AFTER the engine is ready and join the
@@ -1212,7 +1254,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
 
     /* --------------------------- notification ------------------------------ */
 
-    private suspend fun startNotif(text: String, ongoing: Boolean) {
+    // v1.7.0: the notification is now LIVE — boot progress while connecting
+    // (engine ticks), then download/upload speed every 2s while active. The
+    // base text is kept so speed lines append to it instead of replacing it.
+    private val notifHandler = Handler(Looper.getMainLooper())
+    @Volatile private var notifBaseText = ""
+    @Volatile private var lastNotifUpdateMs = 0L
+
+    private fun buildNotif(text: String, ongoing: Boolean): android.app.Notification {
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
             nm.createNotificationChannel(
@@ -1227,19 +1276,70 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             this, 1, Intent(this, KukuVpnService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_notify_sync) // replace with a proper vector in v1.1
             .setContentTitle("Kuku VPN")
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(contentIntent)
             .addAction(0, getString(R.string.notif_action_stop), stopIntent)
             .setOngoing(ongoing)
+            .setOnlyAlertOnce(true)
             .build()
+    }
+
+    private suspend fun startNotif(text: String, ongoing: Boolean) {
+        notifBaseText = text
+        lastNotifUpdateMs = System.currentTimeMillis()
+        val notif = buildNotif(text, ongoing)
         withContext(Dispatchers.Main) {
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
             } else {
                 startForeground(NOTIF_ID, notif)
+            }
+        }
+    }
+
+    /** Throttled in-place update of the foreground notification (main thread). */
+    private fun updateNotif(text: String, force: Boolean = false) {
+        val now = System.currentTimeMillis()
+        if (!force && now - lastNotifUpdateMs < 900) return
+        lastNotifUpdateMs = now
+        notifHandler.post {
+            runCatching {
+                getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotif(text, ongoing = true))
+            }
+        }
+    }
+
+    /** Progress line under "Establishing tunnel…" — driven by the engine ticks. */
+    private fun notifProgress(detail: String) {
+        val d = if (detail.length > 90) detail.take(90) + "…" else detail
+        updateNotif(getString(R.string.notif_connecting) + "\n" + d)
+    }
+
+    /**
+     * v1.7.0: while ACTIVE, append a live speed line to the notification every
+     * 2s (v2rayNG-style). The loop dies with the state change — no leaks.
+     */
+    private fun startNotifSpeedLoop() {
+        scope.launch {
+            var lastIn = ServiceBridge.stats.value.bytesIn
+            var lastOut = ServiceBridge.stats.value.bytesOut
+            while (ServiceBridge.state.value == TunnelState.ACTIVE && !stopping.get()) {
+                delay(2000)
+                val s = ServiceBridge.stats.value
+                val dIn = (s.bytesIn - lastIn).coerceAtLeast(0) / 2
+                val dOut = (s.bytesOut - lastOut).coerceAtLeast(0) / 2
+                lastIn = s.bytesIn; lastOut = s.bytesOut
+                val flag = flagOf(ServiceBridge.exitCountry.value)
+                val base = notifBaseText.ifBlank { getString(R.string.notif_active) }
+                updateNotif(
+                    base + (if (flag.isNotBlank()) " $flag" else "") +
+                        "\n▼ ${formatSpeed(dIn)} · ▴ ${formatSpeed(dOut)}",
+                    force = true,
+                )
             }
         }
     }

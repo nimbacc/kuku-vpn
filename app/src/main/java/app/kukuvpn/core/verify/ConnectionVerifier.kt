@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 data class Verdict(
     val ok: Boolean,
     val exitIp: String = "",
+    val exitCountry: String = "", // v1.7.0: ISO-3166 alpha-2 from the Cloudflare trace ("loc=DE")
     val latencyMs: Long = 0,
     val reason: String = "",
 )
@@ -76,8 +77,11 @@ object ConnectionVerifier {
                                 .firstOrNull { it.startsWith("ip=") }
                                 ?.removePrefix("ip=") ?: ""
                             if (ip.isNotBlank()) {
+                                val country = text.lineSequence()
+                                    .firstOrNull { it.startsWith("loc=") }
+                                    ?.removePrefix("loc=") ?: ""
                                 val latency = System.currentTimeMillis() - started
-                                return Verdict(true, ip, latency)
+                                return Verdict(true, ip, country, latency)
                             }
                         }
                         lastReason = "probe ${resp.code} ${probe.url.removePrefix("https://").substringBefore('/')} (attempt ${attempt + 1})"
@@ -136,7 +140,8 @@ object ConnectionVerifier {
                 Request.Builder().url(PROBES[0].url).build()
             ).execute().use { resp ->
                 if (resp.code == 204) {
-                    Verdict(true, fetchExitIp(proxy), System.currentTimeMillis() - started)
+                    val (ip, country) = fetchExitInfo(proxy)
+                    Verdict(true, ip, country, System.currentTimeMillis() - started)
                 } else {
                     Verdict(false, reason = "probe ${resp.code} ${PROBES[0].url.removePrefix("https://").substringBefore('/')}$attemptTag")
                 }
@@ -146,14 +151,17 @@ object ConnectionVerifier {
         }
     }
 
-    private fun fetchExitIp(proxy: Proxy): String = runCatching {
+    private fun fetchExitIp(proxy: Proxy): String = fetchExitInfo(proxy).first
+
+    /** v1.7.0: ip + country in one request (the trace carries "ip=…" and "loc=…"). */
+    fun fetchExitInfo(proxy: Proxy): Pair<String, String> = runCatching {
         probeClient.newBuilder().proxy(proxy).build().newCall(
             Request.Builder().url("https://1.1.1.1/cdn-cgi/trace").build()
         ).execute().use { resp ->
-            resp.body?.string()
-                ?.lineSequence()
-                ?.firstOrNull { it.startsWith("ip=") }
-                ?.removePrefix("ip=") ?: ""
+            val lines = resp.body?.string()?.lineSequence() ?: emptySequence()
+            val ip = lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=") ?: ""
+            val country = lines.firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=") ?: ""
+            ip to country
         }
-    }.getOrDefault("")
+    }.getOrDefault("" to "")
 }

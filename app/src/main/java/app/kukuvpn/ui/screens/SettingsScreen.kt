@@ -2,6 +2,8 @@ package app.kukuvpn.ui.screens
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -36,12 +38,23 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
+import app.kukuvpn.core.backup.Backup
+import app.kukuvpn.core.config.SingBoxConfigBuilder
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.data.SplitMode
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
+/**
+ * v1.7.0 — restructured. The VPN/proxy switch that used to sit at the bottom
+ * of Home (the two cryptic buttons the user asked about) moved here into a
+ * "Device mode" card WITH a plain-language explanation. New cards: Routing &
+ * DNS (Iranian bypass / ad block / DoH provider), Emergency mode, LAN share
+ * and Backup & restore.
+ */
 @Composable
 fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {}, onOpenAbout: () -> Unit = {}) {
     val context = LocalContext.current
@@ -49,6 +62,39 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
     val scope = rememberCoroutineScope()
     val settings by app.settingsStore.settings.collectAsState(initial = AppSettings())
     var appsDialog by remember { mutableStateOf(false) }
+
+    // v1.7.0 backup: SAF pickers — the file lives wherever the user puts it
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument(Backup.MIME)
+    ) { uri -> if (uri != null) {
+        scope.launch {
+            runCatching {
+                val profiles = app.profileStore.snapshot()
+                val current = app.settingsStore.snapshot()
+                withContext(Dispatchers.IO) { Backup.export(context, uri, profiles, current) }
+            }.onSuccess {
+                snackbar.showSnackbar(context.getString(R.string.backup_exported))
+            }.onFailure {
+                snackbar.showSnackbar(context.getString(R.string.backup_failed, it.message ?: "?"))
+            }
+        }
+    } }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) {
+        scope.launch {
+            runCatching {
+                val payload = withContext(Dispatchers.IO) { Backup.parse(context, uri) }
+                app.profileStore.replaceAll(payload.profiles)
+                app.settingsStore.applyBackup(payload.settings)
+                payload.profiles.size
+            }.onSuccess { count ->
+                snackbar.showSnackbar(context.getString(R.string.backup_restored, count))
+            }.onFailure {
+                snackbar.showSnackbar(context.getString(R.string.backup_failed, it.message ?: "?"))
+            }
+        }
+    } }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall)
@@ -71,6 +117,33 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
                     )
                 }
                 Text("›", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        /* ---------------------------- routing & dns --------------------------- */
+        SectionCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.settings_routing), style = MaterialTheme.typography.titleMedium)
+                ToggleRow(stringResource(R.string.settings_ir_bypass), settings.irBypass) { v -> scope.launch { app.settingsStore.setIrBypass(v) } }
+                Text(stringResource(R.string.settings_ir_bypass_desc), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ToggleRow(stringResource(R.string.settings_adblock), settings.adBlock) { v -> scope.launch { app.settingsStore.setAdBlock(v) } }
+                Text(stringResource(R.string.settings_adblock_desc), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.settings_dns), style = MaterialTheme.typography.titleSmall)
+                listOf(
+                    "cloudflare" to stringResource(R.string.dns_cloudflare),
+                    "google" to stringResource(R.string.dns_google),
+                    "quad9" to stringResource(R.string.dns_quad9),
+                ).forEach { (code, label) ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = settings.dnsProvider == code, onClick = { scope.launch { app.settingsStore.setDnsProvider(code) } })
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Text(
+                    stringResource(R.string.settings_routing_hint),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -144,6 +217,31 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
                 }
                 ToggleRow(stringResource(R.string.settings_auto_fallback), settings.autoFallback) { v -> scope.launch { app.settingsStore.setAutoFallback(v) } }
                 Text(stringResource(R.string.fallback_desc), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ToggleRow(stringResource(R.string.settings_emergency), settings.emergencyMode) { v -> scope.launch { app.settingsStore.setEmergencyMode(v) } }
+                Text(stringResource(R.string.settings_emergency_desc), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        /* ----------------------------- device mode ---------------------------- */
+        SectionCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.settings_device_mode), style = MaterialTheme.typography.titleMedium)
+                ToggleRow(
+                    if (settings.vpnMode) stringResource(R.string.mode_vpn) else stringResource(R.string.mode_proxy),
+                    settings.vpnMode,
+                ) { v -> scope.launch { app.settingsStore.setVpnMode(v) } }
+                Text(
+                    if (settings.vpnMode) stringResource(R.string.mode_vpn_desc) else stringResource(R.string.mode_proxy_desc),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(stringResource(R.string.conn_applies_next), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ToggleRow(stringResource(R.string.settings_lan_share), settings.lanShare) { v -> scope.launch { app.settingsStore.setLanShare(v) } }
+                Text(
+                    stringResource(R.string.settings_lan_share_desc, SingBoxConfigBuilder.LAN_SHARE_PORT),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
 
@@ -151,7 +249,22 @@ fun SettingsScreen(snackbar: SnackbarHostState, onOpenConnection: () -> Unit = {
         SectionCard {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 ToggleRow(stringResource(R.string.settings_sub_auto_update), settings.subAutoUpdate) { v -> scope.launch { app.settingsStore.setSubAutoUpdate(v) } }
-                ToggleRow(stringResource(R.string.mode_vpn), settings.vpnMode) { v -> scope.launch { app.settingsStore.setVpnMode(v) } }
+            }
+        }
+
+        /* ------------------------------ backup --------------------------------- */
+        SectionCard {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.settings_backup), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.settings_backup_desc), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { exportLauncher.launch(Backup.SUGGESTED_NAME) }) {
+                        Text(stringResource(R.string.backup_export))
+                    }
+                    TextButton(onClick = { importLauncher.launch(arrayOf(Backup.MIME, "text/*", "application/octet-stream")) }) {
+                        Text(stringResource(R.string.backup_import))
+                    }
+                }
             }
         }
 

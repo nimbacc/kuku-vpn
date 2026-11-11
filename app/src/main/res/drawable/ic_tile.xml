@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.7.0 — Quick Settings tile icon: a shield with a keyhole. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,1L3,5v6c0,5.55 3.84,10.74 9,12 5.16,-1.26 9,-6.45 9,-12V5L12,1zM12,6c1.4,0 2.5,1.1 2.5,2.5V10c0.6,0 1,0.4 1,1v3.5c0,0.6 -0.4,1 -1,1h-5c-0.6,0 -1,-0.4 -1,-1V11c0,-0.6 0.4,-1 1,-1V8.5C9.5,7.1 10.6,6 12,6zM12,7.2c-0.7,0 -1.3,0.6 -1.3,1.3V10h2.6V8.5C13.3,7.8 12.7,7.2 12,7.2z" />
+</vector>

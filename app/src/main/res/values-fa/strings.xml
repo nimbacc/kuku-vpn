@@ -27,6 +27,11 @@
     <string name="stats_exit">IP خروجی</string>
     <string name="verify_note">«متصل» فقط وقتی نمایش داده می‌شود که یک درخواست واقعی از تونل عبور کرده و پاسخ برگشته باشد.</string>
 
+    <!-- v1.7.0 live speed chart -->
+    <string name="chart_title">سرعت لحظه‌ای</string>
+    <string name="chart_caption">۶۰ ثانیهٔ اخیر · اوج جلسه %1$s بر ثانیه</string>
+    <string name="chart_idle">برای دیدن سرعت زنده وصل شو — این قسمت جوابِ «الان چقدر سریع است؟» است</string>
+
     <!-- Free WARP (auto-setup) -->
     <string name="warp_profile_name">کلادفلر WARP (رایگان)</string>
     <string name="warp_masque_h2_name">کلادفلر WARP (پشتیبان TCP)</string>
@@ -147,6 +152,45 @@
     <string name="fallback_desc">اگر پروفایل انتخابی نتواند اتصال واقعی را ثابت کند، گزینه‌های رتبه‌بندی‌شدهٔ بعدی امتحان می‌شوند و روش موفق به یادگار می‌ماند.</string>
     <string name="settings_sub_auto_update">به‌روزرسانی خودکار اشتراک‌ها</string>
     <string name="settings_notifications">اعلان‌ها</string>
+
+    <!-- v1.7.0 routing & DNS -->
+    <string name="settings_routing">مسیریابی و DNS</string>
+    <string name="settings_ir_bypass">سایت‌ها و اپ‌های ایرانی از تونل خارج شوند</string>
+    <string name="settings_ir_bypass_desc">اپ‌های بانکی، دولتی و بقیهٔ دامنه‌ها/آی‌پی‌های ایرانی مستقیم وصل می‌شوند (نه هزینهٔ تونل، نه آی‌پی خارجی برای سرویس‌های داخلی)؛ بقیهٔ ترافیک از تونل می‌رود. فهرست، دستهٔ «ir» اجتماعی geosite/geoip است.</string>
+    <string name="settings_adblock">مسدودکنندهٔ تبلیغات (سیستمی)</string>
+    <string name="settings_adblock_desc">اتصال به دامنه‌های شناخته‌شدهٔ تبلیغاتی و ردیاب‌ها (فهرست اجتماعی ads-all) داخل تونل قطع می‌شود — اپ‌ها کمتر تبلیغ می‌بینند، بدون هیچ تنظیمی برای هر اپ.</string>
+    <string name="settings_dns">DNS (رمزنگاری‌شده، DoH)</string>
+    <string name="dns_cloudflare">کلادفلر (1.1.1.1)</string>
+    <string name="dns_google">گوگل (8.8.8.8)</string>
+    <string name="dns_quad9">Quad9 (9.9.9.9)</string>
+    <string name="settings_routing_hint">اگر این فهرست‌ها روی شبکهٔ شما دانلود نشوند، تونل همچنان وصل می‌شود — فقط آن قانون اعمال نمی‌شود.</string>
+
+    <!-- v1.7.0 emergency mode -->
+    <string name="settings_emergency">حالت اضطراری</string>
+    <string name="settings_emergency_desc">برای روزهای فیلترینگ سنگین: یک کلید می‌زنی و هر اتصالی، تمام زنجیرهٔ رتبه‌بندی‌شدهٔ روش انتخابی‌ات را امتحان می‌کند — اول مستقیم، بعد همهٔ زیرساخت‌ها — با صبورترین جست‌وجو. بدون اینکه مجبور باشی چیزی را دوباره تنظیم کنی. بعد از فروکش کردن، خاموشش کن.</string>
+
+    <!-- v1.7.0 device mode -->
+    <string name="settings_device_mode">حالت دستگاه</string>
+    <string name="mode_vpn_desc">تونل کامل دستگاه: همهٔ ترافیک گوشی از تونل می‌رود. خاموشش کنی، فقط یک پروکسی محلی اجرا می‌شود — آن‌وقت اپ‌هایی که SOCKS/HTTP را ساپورت می‌کنند (مرورگر، تلگرام و…) می‌توانند از 127.0.0.1:2080 استفاده کنند و بقیهٔ چیزها دست‌نخورده می‌مانند.</string>
+    <string name="mode_proxy_desc">فقط پروکسی محلی: ترافیک گوشی خودبه‌خود جابه‌جا نمی‌شود؛ فقط اپ‌هایی که به 127.0.0.1:2080 (SOCKS/HTTP) اشاره می‌کنی از تونل استفاده می‌کنند. روشنش کنی، تونل کامل دستگاه می‌شود.</string>
+    <string name="settings_lan_share">اشتراک پروکسی در شبکهٔ محلی</string>
+    <string name="settings_lan_share_desc">وقتی وصل است، دستگاه‌های دیگر روی هات‌اسپات/وای‌فای گوشی می‌توانند از این تونل استفاده کنند: پروکسی آن‌ها را روی IP گوشی و پورت %1$d (SOCKS/HTTP) بگذار. فقط روی شبکه‌ای که به آن اعتماد داری فعال کن — این پروکسی رمز ندارد.</string>
+
+    <!-- v1.7.0 backup -->
+    <string name="settings_backup">پشتیبان‌گیری و بازیابی</string>
+    <string name="settings_backup_desc">همهٔ پروفایل‌ها و تنظیمات در یک فایل JSON — قبل از نصب مجدد خروجی بگیر، روی گوشی جدید بازیابی کن. فایل جز با خودت هیچ‌جا نمی‌رود.</string>
+    <string name="backup_export">دریافت فایل پشتیبان</string>
+    <string name="backup_import">بازیابی از فایل پشتیبان</string>
+    <string name="backup_exported">فایل پشتیبان ذخیره شد</string>
+    <string name="backup_restored">بازیابی شد — %1$d پروفایل ادغام شد</string>
+    <string name="backup_failed">پشتیبان‌گیری ناموفق: %1$s</string>
+
+    <!-- v1.7.0 update check -->
+    <string name="about_check_update">بررسی نسخهٔ جدید</string>
+    <string name="about_update_latest">به‌روزترین نسخه را داری</string>
+    <string name="about_update_available">نسخهٔ جدید موجود است: %1$s — برای باز کردن صفحهٔ انتشار بزن</string>
+    <string name="about_update_failed">بررسی ناموفق: %1$s</string>
+    <string name="about_change_170">1.7.0 — پرچم کشور کنار آی‌پی خروجی، نمودار سرعتِ بازطراحی‌شده و خودتوضیح، انتقال کلید تونل/پروکسی به تنظیمات با توضیح واقعی، کلید Quick Settings برای اتصال تک‌لمسی، سرعت زنده در اعلان، بایپس سایت‌ها و اپ‌های ایرانی (بانکی‌ها مستقیم می‌مانند)، مسدودکنندهٔ تبلیغات سیستمی، DNS رمزنگاری‌شدهٔ قابل انتخاب، حالت اضطراری، اشتراک پروکسی در شبکهٔ محلی، و پشتیبان‌گیری/بازیابی همه‌چیز</string>
 
     <!-- Logs -->
     <string name="logs_clear">پاک کردن</string>

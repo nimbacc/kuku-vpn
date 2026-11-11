@@ -28,6 +28,7 @@ import kotlinx.serialization.json.putJsonObject
 object SingBoxConfigBuilder {
 
     const val PROXY_PORT = 2080
+    const val LAN_SHARE_PORT = 2081 // v1.7.0 mixed inbound on 0.0.0.0 when lanShare is on
     const val TUN_TAG = "tun-in"
     const val MIXED_TAG = "mixed-in"
 
@@ -46,7 +47,11 @@ object SingBoxConfigBuilder {
     const val FLUX_TAG = "proxy-fast"
 
     /** Returns the config as a JSON string — exactly what Libbox.newService expects. */
-    fun build(profile: Profile, settings: AppSettings): String = buildJsonObject {
+    fun build(
+        profile: Profile,
+        settings: AppSettings,
+        ruleFiles: Map<String, String> = emptyMap(), // v1.7.0 tag → .srs path (ready local rule-sets)
+    ): String = buildJsonObject {
         val fluxPorts = fluxPortsFor(profile, settings)
         val routeTarget = if (fluxPorts.isNotEmpty()) FLUX_TAG else "proxy"
         putJsonObject("log") {
@@ -69,12 +74,20 @@ object SingBoxConfigBuilder {
         // no bootstrap resolution is needed.
         // "strategy: ipv4_only" keeps apps off IPv6 targets, which many socks5
         // exits cannot reach (AAAA answered → connect hangs → more "dead" apps).
+        // DNS over HTTPS — v1.7.0: the provider is user-selectable (Settings →
+        // Routing & DNS). All three are IP-literal URLs so no bootstrap
+        // resolution is needed (the original 1.2.2 reasoning still holds).
+        val dohUrl = when (settings.dnsProvider) {
+            "google" -> "https://8.8.8.8/dns-query"
+            "quad9" -> "https://9.9.9.9/dns-query"
+            else -> "https://1.1.1.1/dns-query" // default + unknown values
+        }
         putJsonObject("dns") {
             put("strategy", "ipv4_only")
             putJsonArray("servers") {
                 add(buildJsonObject {
                     put("tag", "dns-remote")
-                    put("address", "https://1.1.1.1/dns-query")
+                    put("address", dohUrl)
                     // FLUX: DNS rides the urltest group too, so lookups take the
                     // currently-fastest path (falling back to "proxy" when the
                     // group does not exist for this profile)
@@ -118,6 +131,19 @@ object SingBoxConfigBuilder {
                 put("listen_port", PROXY_PORT)
                 put("sniff", true)
             })
+            // v1.7.0 LAN share: a second mixed inbound on ALL interfaces —
+            // other devices on the phone's hotspot/Wi-Fi set their proxy to
+            // <phone-ip>:2081 and ride the same tunnel. Opt-in, default off;
+            // only ever enable on a network you control.
+            if (settings.lanShare) {
+                add(buildJsonObject {
+                    put("type", "mixed")
+                    put("tag", "mixed-lan")
+                    put("listen", "0.0.0.0")
+                    put("listen_port", LAN_SHARE_PORT)
+                    put("sniff", true)
+                })
+            }
         }
 
         putJsonArray("outbounds") {
@@ -164,6 +190,11 @@ object SingBoxConfigBuilder {
                 })
             }
             add(buildJsonObject { put("type", "direct"); put("tag", "direct") })
+            // v1.7.0 ad block: the deprecated-but-still-supported block outbound
+            // (a 1.11-compatible alternative to the newer reject ACTION)
+            if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS)) {
+                add(buildJsonObject { put("type", "block"); put("tag", "ads-block") })
+            }
             add(buildJsonObject { put("type", "dns"); put("tag", "dns-out") })
         }
 
@@ -183,11 +214,48 @@ object SingBoxConfigBuilder {
         }
 
         putJsonObject("route") {
+            // v1.7.0: local rule-sets (binary .srs, pre-downloaded by RuleSets
+            // with jsDelivr→raw fallback). ONLY files that are ready land here,
+            // so a blocked CDN can never fail the connect — fail-open by design.
+            val ruleSetEntries = ruleFiles.map { (tag, path) ->
+                buildJsonObject {
+                    put("type", "local")
+                    put("tag", tag)
+                    put("format", "binary")
+                    put("path", path)
+                }
+            }
+            if (ruleSetEntries.isNotEmpty()) {
+                putJsonArray("rule_set") { ruleSetEntries.forEach { add(it) } }
+            }
             putJsonArray("rules") {
                 add(buildJsonObject {
                     put("protocol", "dns")
                     put("outbound", "dns-out")
                 })
+                // ad/tracker domains die here (checked before everything else)
+                if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS)) {
+                    add(buildJsonObject {
+                        put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS))
+                        put("outbound", "ads-block")
+                    })
+                }
+                // Iranian sites/apps go DIRECT — banking, government, domestic
+                // news never pay the tunnel tax, foreign traffic still rides it
+                if (settings.irBypass) {
+                    if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_IR)) {
+                        add(buildJsonObject {
+                            put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_IR))
+                            put("outbound", "direct")
+                        })
+                    }
+                    if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOIP_IR)) {
+                        add(buildJsonObject {
+                            put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOIP_IR))
+                            put("outbound", "direct")
+                        })
+                    }
+                }
                 add(buildJsonObject {
                     put("ip_is_private", true)
                     put("outbound", "direct")
