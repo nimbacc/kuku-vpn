@@ -5,6 +5,7 @@ import android.os.SystemClock
 import app.kukuvpn.KukuApp
 import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
+import app.kukuvpn.core.warp.WarpMasqueEngine
 import app.kukuvpn.data.Profile
 import app.kukuvpn.data.ProfileType
 import java.io.File
