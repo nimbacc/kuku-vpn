@@ -543,6 +543,20 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         ongoing = true,
                     )
                     startNotifSpeedLoop()
+                    // v1.7.1: rule-set downloads happen HERE — through the LIVE
+                    // tunnel, in the background, never on the connect path (the
+                    // v1.7.0 synchronous fetch inside startCore stalled every
+                    // Psiphon/Tor candidate behind blocked-CDN timeouts). Cached
+                    // files serve every later connect; failure costs nothing.
+                    scope.launch {
+                        val r = RuleSets.ensure(this@KukuVpnService, settings)
+                        if (r.fetched.isNotEmpty()) {
+                            ServiceBridge.log(
+                                "INFO",
+                                "rule-sets fetched through the tunnel for the next connect: ${r.fetched.joinToString()}"
+                            )
+                        }
+                    }
                     ServiceBridge.log(
                         "INFO",
                         "tunnel verified via ${attempt.host}:${attempt.port}, " +
@@ -699,15 +713,17 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
             server.start()
             commandServer = server
         }
-        // v1.7.0 routing rule-sets (Iranian bypass / ad block): fetched with a
-        // jsDelivr→raw fallback and cached in filesDir/rules. Only READY files
-        // reach the config — a blocked CDN degrades the routing nicety, never
-        // the connect itself (fail-open).
-        val rules = RuleSets.ensure(this, settings)
+        // v1.7.1: connect path uses ONLY cached rule files — ZERO network here.
+        // (v1.7.0 fetched them synchronously per candidate; on a censored ISP
+        // that added 40–80s of dead CDN timeouts to every connect, which the
+        // Psiphon/Tor boot budgets turned into "never connects".) Fresh files
+        // download through the tunnel right after a verified connect.
+        val rules = RuleSets.cached(this, settings)
         if (rules.failed.isNotEmpty()) {
             ServiceBridge.log(
                 "WARN",
-                "rule-sets unavailable this connect (routing runs without them): ${rules.failed.joinToString()}"
+                "rule-sets not cached yet — this connect routes without them " +
+                    "(they download through the tunnel after connect): ${rules.failed.joinToString()}"
             )
         }
         val config = SingBoxConfigBuilder.build(profile, settings, rules.ready) // JSON string

@@ -194,6 +194,7 @@
     <string name="about_update_latest">You are on the latest version</string>
     <string name="about_update_available">New version available: %1$s — tap to open the release page</string>
     <string name="about_update_failed">Update check failed: %1$s</string>
+    <string name="about_change_171">1.7.1 — three fixes. (1) The Exit-IP tile showed broken text like [C@fbd365e instead of the address: the new country-flag code joined raw char arrays; the flag now renders properly beside a real IP, on the Home tile and in the notification. (2) Psiphon/Tor stopped connecting after the good 1.6.9: the new Iranian-bypass rule-set downloads ran ON the connect path, so every candidate sat up to ~80s behind blocked-CDN timeouts before its core even booted. Downloads now happen through the live tunnel right after a verified connect and connects read only cached files — the connect path is as fast as 1.6.9 again. (3) The Home screen scrolled a little; it now fits the phone screen exactly with no scrolling — a slightly more compact chart and button</string>
     <string name="about_change_170">1.7.0 — country flag next to the exit IP, a redesigned self-explanatory speed chart, the VPN/proxy switch moved to Settings with a real explanation, a Quick Settings tile for one-tap connect, live speed in the notification, Iranian sites/apps bypass (banking apps stay direct), a system-wide ad blocker, selectable encrypted DNS, an emergency mode, proxy sharing over the local network, and backup/restore of everything</string>
 
     <!-- Logs -->

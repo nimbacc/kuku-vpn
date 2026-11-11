@@ -56,11 +56,18 @@ fun formatSpeed(bytesPerSec: Long): String = "${formatBytes(bytesPerSec)}/s"
 /**
  * v1.7.0 — "DE" → 🇩🇪 via regional-indicator symbols. Empty/invalid input
  * returns "" so the UI just shows the bare IP.
+ *
+ * v1.7.1 FIX: Character.toChars() returns a char[] — the old code joined a
+ * List<char[]> and joinToString() called toString() on the ARRAYS, so the
+ * Exit-IP tile showed "[C@fbd365e[C@…" (the user's screenshot). append(char[])
+ * appends the actual characters.
  */
 fun flagOf(countryCode: String): String {
     val cc = countryCode.trim().uppercase(Locale.US)
     if (cc.length != 2 || cc.any { it !in 'A'..'Z' }) return ""
-    return cc.map { Character.toChars(0x1F1E6 + (it.code - 'A'.code)) }.joinToString("")
+    return buildString {
+        for (c in cc) append(Character.toChars(0x1F1E6 + (c.code - 'A'.code)))
+    }
 }
 
 /* ------------------------------- stage bar ------------------------------- */
@@ -144,7 +151,9 @@ fun TrafficChart(downSamples: List<Long>, upSamples: List<Long>, active: Boolean
     val peak = maxOf(downSamples.maxOrNull() ?: 0L, upSamples.maxOrNull() ?: 0L)
 
     Card(modifier, shape = RoundedCornerShape(12.dp)) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
+        // v1.7.1: tightened (canvas 84→62, paddings) so the Home screen fits
+        // ONE phone page with no scrolling (the user's ask)
+        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(stringResource(R.string.chart_title), style = MaterialTheme.typography.titleSmall)
             Text(
                 stringResource(R.string.chart_caption, formatBytes(peak)),
@@ -156,7 +165,7 @@ fun TrafficChart(downSamples: List<Long>, upSamples: List<Long>, active: Boolean
                     stringResource(R.string.chart_idle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
                     textAlign = TextAlign.Center,
                 )
             } else {
@@ -171,8 +180,8 @@ fun TrafficChart(downSamples: List<Long>, upSamples: List<Long>, active: Boolean
                 Canvas(
                     Modifier
                         .fillMaxWidth()
-                        .height(84.dp)
-                        .padding(top = 6.dp)
+                        .height(62.dp)
+                        .padding(top = 4.dp)
                 ) {
                     // scale to the session peak (never zero) — a fixed scale
                     // during a session makes the shape comparable over time

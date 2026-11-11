@@ -7,11 +7,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -97,10 +94,14 @@ fun HomeScreen() {
     val selectedName = profiles.firstOrNull { it.id == selectedId || it.id == activeProfile?.id }?.name
         ?: activeProfile?.name
 
+    // v1.7.1: the Home screen fits ONE phone page — no scrolling (the user's
+    // ask). The button area takes the leftover height (weight), everything
+    // else is fixed-size; error/fallback cards eat into the flexible area
+    // when they appear, so nothing ever clips.
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             when (state) {
@@ -111,7 +112,7 @@ fun HomeScreen() {
                 TunnelState.ACTIVE -> stringResource(R.string.state_active)
                 TunnelState.ERROR -> stringResource(R.string.state_error)
             },
-            style = MaterialTheme.typography.headlineMedium,
+            style = MaterialTheme.typography.headlineSmall,
             color = if (state == TunnelState.ACTIVE) MaterialTheme.colorScheme.primary
             else if (state == TunnelState.ERROR) MaterialTheme.colorScheme.error
             else MaterialTheme.colorScheme.onSurface,
@@ -120,10 +121,10 @@ fun HomeScreen() {
         StageBar(lit = stages)
 
         // ---- connect / cancel / disconnect ----
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(170.dp)) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().weight(1f)) {
             val busy = state == TunnelState.CONNECTING || state == TunnelState.VERIFYING || state == TunnelState.PREPARING
             if (busy) {
-                CircularProgressIndicator(Modifier.size(120.dp))
+                CircularProgressIndicator(Modifier.size(104.dp))
             }
             Button(
                 onClick = {
@@ -139,7 +140,7 @@ fun HomeScreen() {
                     }
                 },
                 enabled = state != TunnelState.OFF || profiles.isNotEmpty(),
-                modifier = Modifier.size(150.dp).height(150.dp),
+                modifier = Modifier.size(128.dp),
                 shape = MaterialTheme.shapes.extraLarge,
             ) {
                 Text(

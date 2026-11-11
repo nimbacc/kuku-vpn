@@ -31,7 +31,11 @@ object RuleSets {
     const val TAG_GEOSITE_ADS = "geosite-ads"
 
     /** What the caller needs to know: ready tag→path + tags that failed. */
-    data class Result(val ready: Map<String, String>, val failed: List<String>)
+    data class Result(
+        val ready: Map<String, String>,
+        val failed: List<String>,
+        val fetched: List<String> = emptyList(), // tags actually downloaded by THIS call
+    )
 
     private data class Def(val tag: String, val fileName: String, val urls: List<String>)
 
@@ -66,10 +70,32 @@ object RuleSets {
     private const val MIN_SRS_BYTES = 1024L
 
     /**
-     * Fetch/collect every rule-set the requested features need. Never throws —
-     * failures degrade to "rule not applied" (returned in [Result.failed]).
+     * v1.7.0 — fetch/collect every rule-set the requested features need. Never
+     * throws — failures degrade to "rule not applied" (returned in [Result.failed]).
+     *
+     * v1.7.1 REGRESSION FIX: this used to run INSIDE startCore — i.e. on the
+     * connect path, synchronously, before libbox could even start. On a
+     * censored network (jsDelivr + raw.githubusercontent both unreachable
+     * direct from the ISP) every candidate paid up to ~40–80s of dead CDN
+     * timeouts BEFORE its core/tunnel booted — Psiphon/Tor connects ballooned
+     * into minutes of nothing and looked dead (the user's "هیچ کدوم وصل
+     * نمیشن" after 1.6.9 worked). Now the connect path uses [cached] (zero
+     * network) and downloads happen ONLY through the LIVE tunnel after a
+     * verified connect — reachable even on censored networks, cached under
+     * filesDir/rules for every later connect.
      */
-    fun ensure(context: android.content.Context, settings: AppSettings): Result {
+    fun ensure(context: android.content.Context, settings: AppSettings): Result =
+        collect(context, settings, allowFetch = true)
+
+    /** v1.7.1 — the connect-path variant: ONLY already-cached files, ZERO network. */
+    fun cached(context: android.content.Context, settings: AppSettings): Result =
+        collect(context, settings, allowFetch = false)
+
+    private fun collect(
+        context: android.content.Context,
+        settings: AppSettings,
+        allowFetch: Boolean,
+    ): Result {
         val wanted = mutableListOf<String>()
         if (settings.irBypass) wanted += listOf(TAG_GEOSITE_IR, TAG_GEOIP_IR)
         if (settings.adBlock) wanted += TAG_GEOSITE_ADS
@@ -78,16 +104,19 @@ object RuleSets {
         val dir = File(context.filesDir, "rules").apply { mkdirs() }
         val ready = mutableMapOf<String, String>()
         val failed = mutableListOf<String>()
+        val fetched = mutableListOf<String>()
         for (tag in wanted) {
             val def = DEFS.firstOrNull { it.tag == tag } ?: continue
             val target = File(dir, def.fileName)
-            if (!isUsable(target) && !download(def, target)) {
+            val downloaded = !isUsable(target) && allowFetch && download(def, target)
+            if (downloaded) fetched += tag
+            if (!isUsable(target)) {
                 failed += tag
                 continue
             }
             ready[tag] = target.absolutePath
         }
-        return Result(ready, failed)
+        return Result(ready, failed, fetched)
     }
 
     private fun isUsable(f: File) = f.isFile && f.length() >= MIN_SRS_BYTES
