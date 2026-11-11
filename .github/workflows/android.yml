@@ -18,6 +18,14 @@ env:
   GO_VERSION: "1.24"
   GRADLE_VERSION: "8.9"
   JAVA_VERSION: "17"
+  # run #46: third_party/corebind ships no go.sum, so `go mod tidy` verifies
+  # EVERY module hash against sum.golang.org on every build — and that service
+  # flaked ("reading tile/8/0/x105/686: stream error: INTERNAL_ERROR"), killing
+  # an otherwise green build. Module versions are pinned in go.mod and the
+  # resolved graph is identical every run, so the sumdb round-trip buys
+  # nothing here; off = hashes recorded from the downloaded content, builds
+  # deterministic, no sum.golang.org dependency.
+  GOSUMDB: off
 
 jobs:
   # ONE aar for BOTH engines. Every gomobile aar embeds the go.Seq runtime —
