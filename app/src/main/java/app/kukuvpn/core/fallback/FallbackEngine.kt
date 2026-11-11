@@ -103,7 +103,16 @@ class FallbackEngine(private val store: ProfileStore) {
                 val chained = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
                 val ordered = when (network) {
                     NET_DIRECT -> standalone
-                    NET_MASQUE, NET_WG -> chained
+                    // v1.7.3: a pinned wire LEADS, it no longer owns the
+                    // protocol alone — the user's field log ("all 1 candidate
+                    // (s) failed — last: timeout") shows the WG-pin death spiral:
+                    // the pinned wire's underlay failed and the chain held
+                    // NOTHING behind it, so a temporary wire outage turned into
+                    // "Psiphon can't connect at all". The standalone core rides
+                    // BEHIND the pinned chained candidate as the safety net —
+                    // the protocol stays exclusive (v1.6.1), only the WIRE
+                    // falls back, and the log says so honestly.
+                    NET_MASQUE, NET_WG -> chained + standalone
                     else -> standalone + chained // smart: direct first, then the WARP chain
                 }
                 return ordered.filterNot { it.id in failedIds }.take(maxCandidates)
@@ -113,7 +122,8 @@ class FallbackEngine(private val store: ProfileStore) {
                 val chained = all.filter { it.fromSubscription == TOR_SOURCE && it.transport == TOR_CHAIN_TRANSPORT }
                 val ordered = when (network) {
                     NET_DIRECT -> standalone
-                    NET_MASQUE, NET_WG -> chained
+                    // v1.7.3: same safety net as the Psiphon branch above
+                    NET_MASQUE, NET_WG -> chained + standalone
                     else -> standalone + chained // smart: direct first, then the WARP chain
                 }
                 return ordered.filterNot { it.id in failedIds }.take(maxCandidates)

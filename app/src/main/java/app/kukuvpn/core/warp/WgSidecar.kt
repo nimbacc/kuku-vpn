@@ -70,7 +70,7 @@ object WgSidecar {
         platform: PlatformInterface,
         candidates: List<Profile>,
         endpointPool: List<String> = emptyList(),
-        endpointsPerCandidate: Int = 5,
+        endpointsPerCandidate: Int = 4,
     ): Result<Profile> =
         mutex.withLock {
             stopInternal()
@@ -81,7 +81,10 @@ object WgSidecar {
                 for (ep in endpoints) {
                     tries++
                     val test = if (ep == candidate.host) candidate else candidate.copy(host = ep)
-                    val started = bootOne(platform, test)
+                    // v1.7.3: the FIRST attempt gets the patient cold probe (the
+                    // WG handshake + WARP path setup + first TLS all land in
+                    // that one window); the sweep attempts keep the tight cap
+                    val started = bootOne(platform, test, cold = tries == 1)
                     if (started.isSuccess) {
                         if (ep != candidate.host) {
                             ServiceBridge.log(
@@ -113,7 +116,7 @@ object WgSidecar {
         }
     }
 
-    private suspend fun bootOne(platform: PlatformInterface, profile: Profile): Result<Unit> =
+    private suspend fun bootOne(platform: PlatformInterface, profile: Profile, cold: Boolean = false): Result<Unit> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val config = buildConfig(profile)
@@ -141,16 +144,25 @@ object WgSidecar {
                 // fallback), never inside the psiphon boot where it would
                 // masquerade as a psiphon failure. The mixed inbound speaks
                 // HTTP CONNECT too — push an actual request through.
-                // v1.7.2: callTimeout 8s caps a dead endpoint (handshake
-                // blackholed → the DoH through the dead WG stalls) at 8s.
+                // v1.7.3 THE FIELD FIX (user log: ten probes, every one dying
+                // at 8s on "dns: lookup failed for www.cloudflare.com" while
+                // the wire itself was never the suspect): the probe URL was a
+                // HOSTNAME, so every liveness check first had to push a DoH
+                // query (TLS-inside-WireGuard) through the young tunnel — on
+                // the user's ISP that extra handshake stalled past the cap
+                // and EVERY endpoint looked dead. The probe now dials the IP
+                // literal 1.1.1.1 directly: CONNECT 1.1.1.1:443 needs ZERO
+                // DNS, so it measures exactly what it should — does the WG
+                // wire carry TLS data. Dead endpoint still capped: 8s, the
+                // cold first attempt 12s.
                 val probe = OkHttpClient.Builder()
                     .connectTimeout(5, TimeUnit.SECONDS)
                     .readTimeout(10, TimeUnit.SECONDS)
-                    .callTimeout(8, TimeUnit.SECONDS)
+                    .callTimeout((if (cold) 12 else 8).toLong(), TimeUnit.SECONDS)
                     .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", SOCKS_PORT)))
                     .build()
                 probe.newCall(
-                    Request.Builder().url("https://www.cloudflare.com/cdn-cgi/trace").build()
+                    Request.Builder().url("https://1.1.1.1/cdn-cgi/trace").build()
                 ).execute().use { resp ->
                     if (!resp.isSuccessful) error("underlay probe failed: HTTP ${resp.code}")
                 }
@@ -159,9 +171,15 @@ object WgSidecar {
 
     /**
      * Minimal TUN-less box: local SOCKS in → WireGuard out. DNS rides the
-     * tunnel itself (DoH to 1.1.1.1 detoured through the WireGuard outbound),
-     * the same anti-poisoning recipe the main core uses — through WARP it is
-     * both unpoisoned and unreachable to the ISP.
+     * tunnel itself — v1.7.3: plain UDP 1.1.1.1 detoured through the
+     * WireGuard outbound, NOT the DoH the main core uses. Inside the WARP
+     * tunnel the UDP query is already encrypted end-to-end (the ISP sees
+     * only WG), so the DoH layer bought nothing and doubled the handshake
+     * cost: TLS-inside-WireGuard was exactly what stalled past the probe
+     * cap on the user's ISP (the ten × 8s "lookup failed" log). One UDP
+     * round trip inside the wire resolves what Psiphon's dials still send
+     * as hostnames (API buckets), and the liveness probe itself now needs
+     * no DNS at all (1.1.1.1 literal).
      */
     private fun buildConfig(profile: Profile): String = buildJsonObject {
         putJsonObject("log") {
@@ -173,7 +191,7 @@ object WgSidecar {
             putJsonArray("servers") {
                 add(buildJsonObject {
                     put("tag", "dns-remote")
-                    put("address", "https://1.1.1.1/dns-query")
+                    put("address", "1.1.1.1")
                     put("detour", "sidecar-out")
                 })
             }

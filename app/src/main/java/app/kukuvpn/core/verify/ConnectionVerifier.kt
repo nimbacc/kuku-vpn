@@ -163,7 +163,15 @@ object ConnectionVerifier {
      *   1. https://1.1.1.1/cdn-cgi/trace          → ip= + loc=
      *   2. https://www.cloudflare.com/cdn-cgi/trace → ip= + loc= (different edge path)
      *   3. https://check.torproject.org/api/ip    → {"IP":"…","IsTor":true} — Tor-friendly, IP only
-     *   4. country only: https://ipwho.is/        → "country_code":"XX" (when steps 1-3 gave an IP but no loc)
+     *   4. country only (when steps 1-3 gave an IP but no loc):
+     *      v1.7.3 a REAL COUNTRY CHAIN, not a single source — the field
+     *      report "Tor still shows no flag": every country source used to be
+     *      Cloudflare-hosted or -fronted (ipwho.is sits behind Cloudflare),
+     *      so a Tor exit that got challenged on step 1-2 was challenged AGAIN
+     *      on step 4 and the flag died with it. Now: ipwho.is →
+     *      ip-api.com (plain HTTP, NO Cloudflare anywhere — the classic
+     *      Tor-friendly geo answer) → ipinfo.io ("country":"XX"). The first
+     *      source that answers a 2-letter code wins.
      * Never throws; blank-blank means "no source answered".
      */
     fun fetchExitInfo(proxy: Proxy): Pair<String, String> {
@@ -194,14 +202,21 @@ object ConnectionVerifier {
                 }
         }.getOrDefault("")
         if (torIp.isBlank()) return "" to ""
-        // best-effort country for the flag — failure costs the flag, not the IP
-        val cc = runCatching {
-            client.newCall(Request.Builder().url("https://ipwho.is/").build()).execute().use { resp ->
-                if (!resp.isSuccessful) return@runCatching ""
-                Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(resp.body?.string() ?: "")
-                    ?.groupValues?.get(1) ?: ""
-            }
-        }.getOrDefault("")
-        return torIp to cc
+        // v1.7.3: best-effort country for the flag through a CHAIN of
+        // increasingly Tor-friendly sources — failure costs the flag, not the IP
+        val cc = listOf(
+            "https://ipwho.is/" to Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\""),
+            // plain HTTP, no CDN in front — answers where Cloudflare challenges
+            "http://ip-api.com/json/?fields=countryCode" to Regex("\"countryCode\"\\s*:\\s*\"([A-Z]{2})\""),
+            "https://ipinfo.io/json" to Regex("\"country\"\\s*:\\s*\"([A-Z]{2})\""),
+        ).firstNotNullOfOrNull { (url, rx) ->
+            runCatching {
+                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                    if (!resp.isSuccessful) return@runCatching null
+                    rx.find(resp.body?.string() ?: "")?.groupValues?.get(1)
+                }
+            }.getOrNull()
+        } ?: ""
+        return torIp to (cc ?: "")
     }
 }
