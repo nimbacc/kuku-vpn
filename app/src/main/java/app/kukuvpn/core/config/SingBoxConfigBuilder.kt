@@ -236,7 +236,7 @@ object SingBoxConfigBuilder {
                 // ad/tracker domains die here (checked before everything else)
                 if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS)) {
                     add(buildJsonObject {
-                        put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS))
+                        putJsonArray("rule_set") { add(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_ADS) }
                         put("outbound", "ads-block")
                     })
                 }
@@ -245,13 +245,13 @@ object SingBoxConfigBuilder {
                 if (settings.irBypass) {
                     if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_IR)) {
                         add(buildJsonObject {
-                            put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_IR))
+                            putJsonArray("rule_set") { add(app.kukuvpn.core.rules.RuleSets.TAG_GEOSITE_IR) }
                             put("outbound", "direct")
                         })
                     }
                     if (ruleFiles.containsKey(app.kukuvpn.core.rules.RuleSets.TAG_GEOIP_IR)) {
                         add(buildJsonObject {
-                            put("rule_set", listOf(app.kukuvpn.core.rules.RuleSets.TAG_GEOIP_IR))
+                            putJsonArray("rule_set") { add(app.kukuvpn.core.rules.RuleSets.TAG_GEOIP_IR) }
                             put("outbound", "direct")
                         })
                     }

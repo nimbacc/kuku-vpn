@@ -94,19 +94,4 @@ class KukuTileService : TileService() {
         tile.label = getString(R.string.app_name)
         tile.updateTile()
     }
-
-    companion object {
-        /** Optional external refresh (API 26+); the tile also refreshes itself
-         *  every time the shade is opened (onStartListening). */
-        fun requestUpdate(context: android.content.Context) {
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    TileService.requestUpdateTile(
-                        context,
-                        ComponentName(context, KukuTileService::class.java)
-                    )
-                }
-            }
-        }
-    }
 }

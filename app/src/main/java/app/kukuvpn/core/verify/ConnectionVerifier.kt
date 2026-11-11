@@ -69,7 +69,7 @@ object ConnectionVerifier {
                     ).execute().use { resp ->
                         if (probe.expect204 && resp.code == 204) {
                             val latency = System.currentTimeMillis() - started
-                            return Verdict(true, fetchExitIp(proxy), latency)
+                            return Verdict(true, exitIp = fetchExitIp(proxy), latencyMs = latency)
                         }
                         if (!probe.expect204 && resp.code == 200) {
                             val text = resp.body?.string() ?: ""
