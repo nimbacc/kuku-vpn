@@ -83,6 +83,7 @@
          proto_* card; the auto-managed profile names stay -->
     <string name="psiphon_profile_name">Psiphon (Free)</string>
     <string name="psiphon_chain_profile_name">Kuku → Psiphon</string>
+    <string name="ai_profile_name">AI (US IP)</string>
 
     <!-- Tor backends (v1.6.0) — selector strings moved to the v1.6.7
          proto_* card; the auto-managed profile names stay -->
@@ -136,6 +137,7 @@
     <string name="profiles_delete">Delete</string>
     <string name="profiles_empty">No profiles yet</string>
     <string name="profiles_last_good">Last known-good</string>
+    <string name="profiles_detected">%1$d config link(s) detected</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
@@ -194,6 +196,7 @@
     <string name="about_update_latest">You are on the latest version</string>
     <string name="about_update_available">New version available: %1$s — tap to open the release page</string>
     <string name="about_update_failed">Update check failed: %1$s</string>
+    <string name="about_change_174">1.7.4 — (1) Tor flag, take two: the country lookup now asks about the KNOWN exit IP and leads with geojs.io (no Cloudflare in front — the classic Tor-user geo answer), then ip-api.com (plain HTTP) and ipinfo.io for the SAME IP; when every web source still refuses, the flag falls back to what the Psiphon core itself reported about its exit region. (2) AI mode: a dedicated section for the AI services — the bundled Psiphon core with a HARD US egress (EgressRegion=US), one tap on Home, the US flag on the tile tells you it worked; the regular Psiphon candidates stay behind it as the safety net. (3) Speed test moved to Profiles (Home\'s button was the wrong home): every profile row has its own test icon — the app connects THAT profile, measures real down/up/ping and announces the verdict weak / medium / good / excellent next to the chart. (4) Add-profile dialog fixed: it scrolls now, survives the keyboard, shows how many config links the paste contains, and imports multiple configs at once — the Profiles section is completed, not removed</string>
     <string name="about_change_173">1.7.3 — two field fixes from your logs. (1) Psiphon over WireGuard: the sidecar\'s liveness probe used a HOSTNAME, so every check first had to push a DoH query (TLS-inside-WireGuard) through the young tunnel — on your ISP that extra handshake stalled past the 8s cap and ALL ten endpoint attempts looked dead (the ten × 8s "lookup failed for www.cloudflare.com" in your log) while the wire itself was never the suspect. The probe now dials the IP literal 1.1.1.1 directly (zero DNS), DNS inside the underlay is one plain UDP query through the encrypted tunnel instead of TLS-in-TLS, the first cold attempt gets a 12s window — and if the WG wire still refuses, the chain now falls through to standalone Psiphon instead of dying with "all 1 candidate(s) failed". (2) Tor flag: every country source was Cloudflare-hosted or -fronted, so an exit that was challenged once was challenged again and the flag never came; the resolver now walks ipwho.is → ip-api.com (plain HTTP, no Cloudflare) → ipinfo.io until one answers the country</string>
     <string name="about_change_172">1.7.2 — flag + IP together in every mode: the exit tile is double-width so the flag and the full address both fit, exit info resolves in the background right after connect, and when an exit refuses Cloudflare\'s trace (Tor does), the app now also asks the Tor Project\'s own IP API and ipwho.is for the country. Real speed test on Home: one tap measures the ACTUAL download/upload/ping of the connected method through the tunnel — WARP, gool, Kuku→Psiphon and Kuku→Tor are all measured the same way, so «which method is best» becomes a number. Auto-reconnect on Wi-Fi/data switch: the session bounces to the new network and the per-network wiring memory leads with the method that worked there — the best method picks itself. Psiphon over WireGuard: the WG underlay now sweeps the same anycast endpoint pool as the plain WARP path — an ISP that blocks only some 162.159.x IPs no longer kills the wire (what the Aether comparison showed)</string>
     <string name="about_change_171">1.7.1 — three fixes. (1) The Exit-IP tile showed broken text like [C@fbd365e instead of the address: the new country-flag code joined raw char arrays; the flag now renders properly beside a real IP, on the Home tile and in the notification. (2) Psiphon/Tor stopped connecting after the good 1.6.9: the new Iranian-bypass rule-set downloads ran ON the connect path, so every candidate sat up to ~80s behind blocked-CDN timeouts before its core even booted. Downloads now happen through the live tunnel right after a verified connect and connects read only cached files — the connect path is as fast as 1.6.9 again. (3) The Home screen scrolled a little; it now fits the phone screen exactly with no scrolling — a slightly more compact chart and button</string>
@@ -202,6 +205,21 @@
     <string name="speedtest_run">Speed test</string>
     <string name="speedtest_running">Measuring…</string>
     <string name="speedtest_failed">failed: %1$s</string>
+    <string name="speedtest_profile_title">Speed test — %1$s</string>
+    <string name="speedtest_connecting">Connecting for the test…</string>
+    <string name="speedtest_could_not_switch">could not switch the connection — try again</string>
+    <string name="speedtest_need_vpn_perm">VPN permission is missing — connect once from Home first</string>
+    <string name="speedtest_not_connected">this profile could not connect — nothing measured</string>
+    <string name="speedtest_fallback">this profile failed — %1$s connected instead</string>
+    <string name="speedtest_quality_weak">Weak</string>
+    <string name="speedtest_quality_medium">Medium</string>
+    <string name="speedtest_quality_good">Good</string>
+    <string name="speedtest_quality_excellent">Excellent</string>
+
+    <!-- v1.7.4 AI mode (US-egress Psiphon) -->
+    <string name="ai_home_title">AI mode — US IP</string>
+    <string name="ai_home_subtitle">Psiphon pinned to a US exit — for Gemini and other AI apps</string>
+    <string name="ai_home_connect">Connect</string>
 
     <!-- Logs -->
     <string name="logs_clear">Clear</string>

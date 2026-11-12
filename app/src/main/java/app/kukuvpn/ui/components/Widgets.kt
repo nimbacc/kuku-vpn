@@ -34,6 +34,18 @@ import java.util.Locale
 
 /* --------------------------- formatting helpers ------------------------- */
 
+/**
+ * v1.7.4 — the Iter-style verdict color: weak red, medium amber, good green,
+ * excellent cyan. Fixed hexes on purpose (readable in both themes).
+ */
+fun qualityColor(q: app.kukuvpn.core.speed.SpeedTester.Quality): Color = when (q) {
+    app.kukuvpn.core.speed.SpeedTester.Quality.WEAK -> Color(0xFFEF5350)
+    app.kukuvpn.core.speed.SpeedTester.Quality.MEDIUM -> Color(0xFFFFB300)
+    app.kukuvpn.core.speed.SpeedTester.Quality.GOOD -> Color(0xFF66BB6A)
+    app.kukuvpn.core.speed.SpeedTester.Quality.EXCELLENT -> Color(0xFF26C6DA)
+}
+
+
 fun formatBytes(bytes: Long): String {
     if (bytes < 1024) return "$bytes B"
     val units = listOf("KB", "MB", "GB", "TB")
@@ -146,7 +158,16 @@ fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
  * Samples are bytes/sec pushed from HomeScreen once per second while active.
  */
 @Composable
-fun TrafficChart(downSamples: List<Long>, upSamples: List<Long>, active: Boolean, modifier: Modifier = Modifier) {
+fun TrafficChart(
+    downSamples: List<Long>,
+    upSamples: List<Long>,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+    // v1.7.4: the Iter-style verdict — announced INSIDE the chart's legend row,
+    // next to the live numbers ("کنار نمودار اعلام کنه")
+    qualityLabel: String? = null,
+    qualityColor: Color = Color(0xFF9E9E9E),
+) {
     // colors must be read OUTSIDE the draw scope (composable context rule)
     val primary = MaterialTheme.colorScheme.primary
     val secondary = MaterialTheme.colorScheme.secondary
@@ -178,9 +199,15 @@ fun TrafficChart(downSamples: List<Long>, upSamples: List<Long>, active: Boolean
                 Row(
                     Modifier.fillMaxWidth().padding(top = 6.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     LegendChip("▾", primary, formatSpeed(downNow))
                     LegendChip("▴", secondary, formatSpeed(upNow))
+                    if (qualityLabel != null) {
+                        // right-aligned quality verdict (weak/medium/good/excellent)
+                        Box(Modifier.weight(1f))
+                        LegendChip("●", qualityColor, qualityLabel)
+                    }
                 }
                 Canvas(
                     Modifier

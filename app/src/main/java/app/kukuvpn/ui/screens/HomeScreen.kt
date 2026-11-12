@@ -34,9 +34,11 @@ import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
 import app.kukuvpn.bg.TunnelStage
 import app.kukuvpn.bg.TunnelState
+import app.kukuvpn.core.fallback.FallbackEngine
+import app.kukuvpn.core.psiphon.PsiphonEngine
+import app.kukuvpn.core.speed.SpeedTester
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.core.warp.WarpSetup
-import app.kukuvpn.core.speed.SpeedTester
 import app.kukuvpn.data.AppSettings
 import app.kukuvpn.ui.components.StatTile
 import app.kukuvpn.ui.components.StageBar
@@ -44,6 +46,7 @@ import app.kukuvpn.ui.components.TrafficChart
 import app.kukuvpn.ui.components.flagOf
 import app.kukuvpn.ui.components.formatBytes
 import app.kukuvpn.ui.components.formatUptime
+import app.kukuvpn.ui.components.qualityColor
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,6 +71,8 @@ fun HomeScreen() {
     val profiles by app.profileStore.profiles.collectAsState(initial = emptyList())
     val selectedId by app.profileStore.selectedId.collectAsState(initial = null)
     val warpStatus by WarpRegistrar.status.collectAsState()
+    // v1.7.4: the last speed test's quality verdict — announced next to the chart
+    val speedVerdict by ServiceBridge.speedVerdict.collectAsState()
 
     // 1 Hz samples for the sparkline, kept on their own stream so the chart
     // never rebuilds the whole screen (the v1.0.7 lesson, RIX-side).
@@ -201,49 +206,57 @@ fun HomeScreen() {
         }
 
         // v1.7.0 redesigned chart — titled, with a live legend (see TrafficChart)
-        TrafficChart(downSamples.toList(), upSamples.toList(), state == TunnelState.ACTIVE, Modifier.fillMaxWidth())
-
-        // v1.7.2: one-tap speed test of the ACTIVE method — real down/up/latency
-        // measured THROUGH the tunnel (the user's "تست سرعت هر روش"). Works for
-        // every method alike: WARP, gool, Kuku→Psiphon, Kuku→Tor.
-        val speedState = remember { mutableStateOf<SpeedTester.Result?>(null) }
-        var speedTesting by remember { mutableStateOf(false) }
-        androidx.compose.foundation.layout.Row(
+        // v1.7.4: the quality verdict (weak/medium/good/excellent) rides the
+        // legend row — the user's Iter-style ask
+        TrafficChart(
+            downSamples.toList(), upSamples.toList(), state == TunnelState.ACTIVE,
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            androidx.compose.material3.TextButton(
-                onClick = {
-                    if (!speedTesting) {
-                        speedTesting = true
-                        speedState.value = null
-                        scope.launch {
-                            speedState.value = SpeedTester.run()
-                            speedTesting = false
-                        }
-                    }
-                },
-                enabled = state == TunnelState.ACTIVE && !speedTesting,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp),
+            qualityLabel = speedVerdict?.let { stringResource(SpeedTester.qualityLabel(it)) },
+            qualityColor = speedVerdict?.let { qualityColor(it) } ?: MaterialTheme.colorScheme.outline,
+        )
+
+        // v1.7.4: the AI section — the user's ask ("یه روش مخصوص آی پی آمریکا
+        // بعنوان بخش مخصوص هوش مصنوعی"). The speed-test row left Home for the
+        // Profiles screen (the user's call: test PER PROFILE, not the tunnel).
+        profiles.firstOrNull { it.transport == PsiphonEngine.TRANSPORT_AI }?.let { ai ->
+            androidx.compose.foundation.layout.Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    if (speedTesting) stringResource(R.string.speedtest_running)
-                    else stringResource(R.string.speedtest_run),
-                    style = MaterialTheme.typography.labelLarge,
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.ai_home_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (selectedId == ai.id && state == TunnelState.ACTIVE) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        stringResource(R.string.ai_home_subtitle),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        scope.launch {
+                            // pin the AI profile: protocol=psiphon + direct (the
+                            // proven fast wiring), then connect like the main button
+                            app.profileStore.select(ai.id)
+                            app.settingsStore.setProtocol(FallbackEngine.PROTO_PSIPHON)
+                            app.settingsStore.setNetwork(FallbackEngine.NET_DIRECT)
+                            if (settings.vpnMode) {
+                                val intent = ServiceBridge.prepare(context)
+                                if (intent != null) vpnPermission.launch(intent)
+                                else ServiceBridge.connect(context)
+                            } else ServiceBridge.connect(context)
+                        }
+                    },
+                    enabled = state == TunnelState.OFF || state == TunnelState.ERROR,
+                ) {
+                    Text(stringResource(R.string.ai_home_connect))
+                }
             }
-            val res = speedState.value
-            Text(
-                when {
-                    res == null -> ""
-                    res.error != null -> stringResource(R.string.speedtest_failed, res.error)
-                    else -> SpeedTester.format(res)
-                },
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
 
         // v1.7.0: the VPN / proxy switch moved to Settings → "Device mode"

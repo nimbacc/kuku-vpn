@@ -388,10 +388,14 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     WgSidecar.stop()
                 }
                 try {
+                    // v1.7.4: the AI candidate forces the US egress — the regular
+                    // candidates keep whatever the Settings exit-country picker says
+                    val isAiCandidate = candidate.transport == PsiphonEngine.TRANSPORT_AI
+                    val region = if (isAiCandidate) PsiphonEngine.AI_EGRESS_REGION else settings.psiphonRegion
                     PsiphonEngine.boot(
                         this,
                         upstreamPort = underlayPort,
-                        region = settings.psiphonRegion,
+                        region = region,
                         onTick = { ms ->
                             val detail = "psiphon ${ms / 1000}s${PsiphonEngine.lastProgressLabel()}"
                             ServiceBridge.log("INFO", "psiphon booting… $detail")
@@ -403,8 +407,8 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                         "psiphon core ready (socks 127.0.0.1:${PsiphonEngine.SOCKS_PORT}${
                             underlayPort?.let { ", underlay socks $it" } ?: ""
                         }${
-                            settings.psiphonRegion.takeIf { it.isNotBlank() && it != "auto" }
-                                ?.let { ", egress $it" } ?: ""
+                            region.takeIf { it.isNotBlank() && it != "auto" }
+                                ?.let { ", egress $it${if (isAiCandidate) " (AI)" else ""}" } ?: ""
                         })"
                     )
                 } catch (e: Exception) {
@@ -1384,16 +1388,34 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
      * The verdict path no longer resolves the exit IP (v1.7.2) — do it here,
      * in the background, so the tile and notification fill in ~1-3s after
      * "Connected" without ever delaying the connect itself.
+     *
+     * v1.7.4: the source chain is METHOD-AWARE (a Tor exit gets geo answers
+     * from Tor-friendly sources first) and, when every HTTP geo source still
+     * refuses, the flag falls back to what the protocol core ITSELF reported:
+     * Psiphon's ConnectedServerRegion notice ("psiphon exit region: US").
      */
     private fun resolveExitInfoInBackground(knownIp: String) {
         if (knownIp.isNotBlank()) return // the 200-trace probe already carried both
+        val candidate = ServiceBridge.activeProfile.value
+        val viaTor = candidate?.fromSubscription == TorEngine.SOURCE
+        val viaPsiphon = candidate?.fromSubscription == PsiphonEngine.SOURCE
         scope.launch {
             val proxy = java.net.Proxy(
                 java.net.Proxy.Type.HTTP,
                 java.net.InetSocketAddress("127.0.0.1", SingBoxConfigBuilder.PROXY_PORT),
             )
-            val (ip, cc) = ConnectionVerifier.fetchExitInfo(proxy)
+            val (ip, geoCc) = ConnectionVerifier.fetchExitInfo(proxy, viaTor = viaTor)
             if (ip.isBlank() || ServiceBridge.state.value != TunnelState.ACTIVE) return@launch
+            // last-resort country: the protocol core's own report beats nothing —
+            // Psiphon tells us the exit region in its notices (the AI mode's
+            // "is this really the US?" answer is exactly this field)
+            var cc = geoCc
+            if (cc.isBlank() && viaPsiphon) {
+                cc = PsiphonEngine.exitRegion.trim().uppercase().take(2)
+                if (cc.isNotBlank()) {
+                    ServiceBridge.log("INFO", "country from psiphon core region: $cc")
+                }
+            }
             ServiceBridge.exitIp.value = ip
             ServiceBridge.exitCountry.value = cc
             val flag = flagOf(cc)

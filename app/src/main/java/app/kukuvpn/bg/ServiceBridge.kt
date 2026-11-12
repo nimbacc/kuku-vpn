@@ -55,6 +55,9 @@ object ServiceBridge {
     // failed, the successful WARP-fallback connection carries this warning
     // (surface a banner on Home — never a plain "Connected" lie).
     val fallbackNote = MutableStateFlow<String?>(null)
+    // v1.7.4: the Iter-style connection-quality verdict of the LAST speed test
+    // (weak/medium/good/excellent) — announced next to the Home chart legend.
+    val speedVerdict = MutableStateFlow<app.kukuvpn.core.speed.SpeedTester.Quality?>(null)
 
     val isBusy: Boolean get() = state.value in setOf(TunnelState.CONNECTING, TunnelState.VERIFYING, TunnelState.PREPARING)
 
@@ -66,6 +69,7 @@ object ServiceBridge {
         activeProfile.value = null
         lastError.value = null
         fallbackNote.value = null
+        speedVerdict.value = null // a fresh session has no measurement yet
     }
 
     fun lit(stage: TunnelStage) {

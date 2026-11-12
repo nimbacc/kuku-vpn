@@ -1,5 +1,6 @@
 package app.kukuvpn.core.speed
 
+import app.kukuvpn.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -31,6 +32,14 @@ import kotlin.random.Random
  */
 object SpeedTester {
 
+    /**
+     * v1.7.4 — the Iter-style verdict the user asked for ("مثل اتر اعلام کنه
+     * کانکشن ضعیفه یا متوسطه یا خوبه یا عالیه"): the measured numbers collapse
+     * into one honest word. Gates are throughput-first with latency demotion —
+     * a 40 Mb/s tunnel that answers in 600ms is NOT "عالی".
+     */
+    enum class Quality { WEAK, MEDIUM, GOOD, EXCELLENT }
+
     data class Result(
         val latencyMs: Long = 0,
         val downBps: Double = 0.0,
@@ -38,6 +47,32 @@ object SpeedTester {
         val error: String? = null,
     ) {
         val ok: Boolean get() = error == null && (downBps > 0 || upBps > 0)
+    }
+
+    /** Mb/s thresholds (down) + latency caps that demote the verdict one step. */
+    fun verdict(r: Result): Quality? {
+        if (!r.ok) return null
+        val downMbps = r.downBps * 8 / 1_000_000
+        val q = when {
+            downMbps >= 20 -> Quality.EXCELLENT
+            downMbps >= 8 -> Quality.GOOD
+            downMbps >= 2.5 -> Quality.MEDIUM
+            else -> Quality.WEAK
+        }
+        return when {
+            q == Quality.EXCELLENT && r.latencyMs > 150 -> Quality.GOOD
+            q == Quality.GOOD && r.latencyMs > 250 -> Quality.MEDIUM
+            q == Quality.MEDIUM && r.latencyMs > 450 -> Quality.WEAK
+            else -> q
+        }
+    }
+
+    /** The verdict's localized one-word label (ضعیف / متوسط / خوب / عالی). */
+    fun qualityLabel(q: Quality): Int = when (q) {
+        Quality.WEAK -> R.string.speedtest_quality_weak
+        Quality.MEDIUM -> R.string.speedtest_quality_medium
+        Quality.GOOD -> R.string.speedtest_quality_good
+        Quality.EXCELLENT -> R.string.speedtest_quality_excellent
     }
 
     private const val DOWN_BYTES_CAP = 25_000_000L

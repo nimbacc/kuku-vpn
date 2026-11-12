@@ -156,67 +156,93 @@ object ConnectionVerifier {
 
 
     /**
-     * v1.7.2: ip + country through a SOURCE CHAIN. The single 1.1.1.1 trace
-     * was blind on some exits — Cloudflare serves cdn-cgi to a Tor exit with
-     * a challenge (no ip= line at all), which is exactly the user's report
-     * ("Tor connects but the IP field is empty"). Chain:
-     *   1. https://1.1.1.1/cdn-cgi/trace          → ip= + loc=
-     *   2. https://www.cloudflare.com/cdn-cgi/trace → ip= + loc= (different edge path)
-     *   3. https://check.torproject.org/api/ip    → {"IP":"…","IsTor":true} — Tor-friendly, IP only
-     *   4. country only (when steps 1-3 gave an IP but no loc):
-     *      v1.7.3 a REAL COUNTRY CHAIN, not a single source — the field
-     *      report "Tor still shows no flag": every country source used to be
-     *      Cloudflare-hosted or -fronted (ipwho.is sits behind Cloudflare),
-     *      so a Tor exit that got challenged on step 1-2 was challenged AGAIN
-     *      on step 4 and the flag died with it. Now: ipwho.is →
-     *      ip-api.com (plain HTTP, NO Cloudflare anywhere — the classic
-     *      Tor-friendly geo answer) → ipinfo.io ("country":"XX"). The first
-     *      source that answers a 2-letter code wins.
-     * Never throws; blank-blank means "no source answered".
+     * v1.7.4: ip + country through a SOURCE CHAIN, now METHOD-AWARE. Field
+     * history proves why this keeps needing sources: v1.7.2's single trace →
+     * v1.7.3's ipwho.is → ip-api.com → ipinfo.io chain STILL came home flagless
+     * ("باز هنگام وصل شدن با تور پرچم نمیاره") — a Tor exit can be challenged or
+     * rate-limited by every one of those at once. The country lookups now query
+     * the KNOWN exit IP (not "who am I") and lead with get.geojs.io, which has
+     * no Cloudflare in front of it and is the classic Tor-user geo answer:
+     *
+     *   ip  : [tor? geojs first, else CF traces first] + check.torproject.org
+     *   cc  : geojs ?ip= → ip-api.com/<ip> (plain HTTP) → ipinfo.io/<ip> → ipwho.is/<ip>
+     *
+     * Never throws; blank-blank means "no source answered" — and for Psiphon
+     * candidates the service falls back to the core's own ConnectedServerRegion.
      */
-    fun fetchExitInfo(proxy: Proxy): Pair<String, String> {
-        val client = probeClient.newBuilder().proxy(proxy).build()
-        for (url in listOf(
+    private val exitClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(10, TimeUnit.SECONDS)
+        .build()
+
+    fun fetchExitInfo(proxy: Proxy, viaTor: Boolean = false): Pair<String, String> {
+        val client = exitClient.newBuilder().proxy(proxy).build()
+        var ip = ""
+        var cc = ""
+        // --- combined sources (ip + country in one answer) ---
+        val combined = if (viaTor) listOf(
+            "https://get.geojs.io/v1/ip/geo.json",      // Tor-friendly, no CF
             "https://1.1.1.1/cdn-cgi/trace",
             "https://www.cloudflare.com/cdn-cgi/trace",
-        )) {
-            val (ip, loc) = runCatching {
+        ) else listOf(
+            "https://1.1.1.1/cdn-cgi/trace",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+            "https://get.geojs.io/v1/ip/geo.json",
+        )
+        for (url in combined) {
+            val parsed = runCatching {
                 client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
                     if (!resp.isSuccessful) return@runCatching "" to ""
-                    val lines = resp.body?.string()?.lineSequence() ?: emptySequence()
-                    val ip = lines.firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=") ?: ""
-                    val loc = lines.firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=") ?: ""
-                    ip to loc
+                    val body = resp.body?.string() ?: return@runCatching "" to ""
+                    val traceIp = body.lineSequence()
+                        .firstOrNull { it.startsWith("ip=") }?.removePrefix("ip=") ?: ""
+                    val traceLoc = body.lineSequence()
+                        .firstOrNull { it.startsWith("loc=") }?.removePrefix("loc=") ?: ""
+                    if (traceIp.isNotBlank()) return@runCatching traceIp to traceLoc
+                    // geojs JSON: "ip":"…","country_code":"XX"
+                    val jIp = Regex("\"ip\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1) ?: ""
+                    val jCc = Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\"").find(body)?.groupValues?.get(1) ?: ""
+                    jIp to jCc
                 }
             }.getOrDefault("" to "")
-            if (ip.isNotBlank()) return ip to loc
+            if (parsed.first.isNotBlank()) {
+                ip = parsed.first
+                if (parsed.second.isNotBlank()) return ip to parsed.second
+                break // have the IP; country comes from the per-IP chain below
+            }
         }
-        // Tor-friendly source: the Tor Project's own check API answers from
-        // Tor exits where Cloudflare will not.
-        val torIp = runCatching {
-            client.newCall(Request.Builder().url("https://check.torproject.org/api/ip").build())
-                .execute().use { resp ->
-                    if (!resp.isSuccessful) return@runCatching ""
-                    Regex("\"IP\"\\s*:\\s*\"([^\"]+)\"").find(resp.body?.string() ?: "")
-                        ?.groupValues?.get(1) ?: ""
-                }
-        }.getOrDefault("")
-        if (torIp.isBlank()) return "" to ""
-        // v1.7.3: best-effort country for the flag through a CHAIN of
-        // increasingly Tor-friendly sources — failure costs the flag, not the IP
-        val cc = listOf(
-            "https://ipwho.is/" to Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\""),
-            // plain HTTP, no CDN in front — answers where Cloudflare challenges
-            "http://ip-api.com/json/?fields=countryCode" to Regex("\"countryCode\"\\s*:\\s*\"([A-Z]{2})\""),
-            "https://ipinfo.io/json" to Regex("\"country\"\\s*:\\s*\"([A-Z]{2})\""),
-        ).firstNotNullOfOrNull { (url, rx) ->
-            runCatching {
-                client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
-                    if (!resp.isSuccessful) return@runCatching null
-                    rx.find(resp.body?.string() ?: "")?.groupValues?.get(1)
-                }
-            }.getOrNull()
-        } ?: ""
-        return torIp to (cc ?: "")
+        // --- ip-only fallback: the Tor Project's own check API (designed for exits) ---
+        if (ip.isBlank()) {
+            ip = runCatching {
+                client.newCall(Request.Builder().url("https://check.torproject.org/api/ip").build())
+                    .execute().use { resp ->
+                        if (!resp.isSuccessful) return@runCatching ""
+                        Regex("\"IP\"\\s*:\\s*\"([^\"]+)\"").find(resp.body?.string() ?: "")
+                            ?.groupValues?.get(1) ?: ""
+                    }
+            }.getOrDefault("")
+            if (ip.isBlank()) return "" to ""
+        }
+        // --- country-only chain, each source asked about the KNOWN exit IP ---
+        if (cc.isBlank()) {
+            cc = listOf(
+                "https://get.geojs.io/v1/ip/country.json?ip=$ip" to
+                    Regex("\"(?:country_code|country)\"\\s*:\\s*\"([A-Z]{2})\""),
+                // plain HTTP, no CDN in front — answers where Cloudflare challenges
+                "http://ip-api.com/json/$ip?fields=countryCode" to
+                    Regex("\"countryCode\"\\s*:\\s*\"([A-Z]{2})\""),
+                "https://ipinfo.io/$ip/json" to Regex("\"country\"\\s*:\\s*\"([A-Z]{2})\""),
+                "https://ipwho.is/$ip" to Regex("\"country_code\"\\s*:\\s*\"([A-Z]{2})\""),
+            ).firstNotNullOfOrNull { (url, rx) ->
+                runCatching {
+                    client.newCall(Request.Builder().url(url).build()).execute().use { resp ->
+                        if (!resp.isSuccessful) return@runCatching null
+                        rx.find(resp.body?.string() ?: "")?.groupValues?.get(1)
+                    }
+                }.getOrNull()
+            } ?: ""
+        }
+        return ip to cc
     }
 }

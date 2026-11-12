@@ -99,6 +99,16 @@ object PsiphonEngine {
     const val SOURCE = "psiphon"
     const val TRANSPORT_STANDALONE = "psiphon"
     const val TRANSPORT_CHAINED = "kuku-psiphon"
+    /**
+     * v1.7.4 — the AI method: the SAME bundled Psiphon core booted with a hard
+     * EgressRegion="US". Gemini/ChatGPT-class services reject Iranian and most
+     * non-US datacenter IPs, but the user reports plain Psiphon is the one
+     * method that reaches them — a US-pinned Psiphon keeps that property and
+     * makes the exit country deterministic when the network can provide it.
+     */
+    const val TRANSPORT_AI = "psiphon-ai"
+    /** The AI method's forced egress country. */
+    const val AI_EGRESS_REGION = "US"
 
     private const val BINARY = "libpsiphon.so"
     // v1.6.0: raised from 90s — Psiphon's link-selection on a filtered Iranian
@@ -141,6 +151,10 @@ object PsiphonEngine {
 
     @Volatile private var proc: Process? = null
     @Volatile private var procUpstreamPort: Int? = null
+    // v1.7.4: the egress region the RUNNING core was configured with — warm
+    // reuse is only safe when the wiring AND the region match (an "auto" core
+    // must not be reused for an AI candidate that needs "US" and vice versa)
+    @Volatile private var procRegion: String = ""
     @Volatile private var tunnelUp: Boolean = false
     @Volatile private var lastExitRegion: String = ""
     @Volatile private var lastProgress: String = ""
@@ -192,8 +206,14 @@ object PsiphonEngine {
         onTick: (Long) -> Unit,
     ): Result<Unit> = mutex.withLock {
         if (proc != null) {
-            if (procUpstreamPort == upstreamPort) return@withLock Result.success(Unit) // warm reuse
-            stopInternal() // different wiring — cold restart
+            if (procUpstreamPort == upstreamPort && procRegion == region) {
+                // v1.7.4: warm reuse now also requires the SAME egress region —
+                // booting the AI candidate after an auto-exit one (or the
+                // reverse) must cold-restart with the new config, not ride the
+                // old core
+                return@withLock Result.success(Unit) // warm reuse
+            }
+            stopInternal() // different wiring or region — cold restart
         }
         val bin = File(context.applicationInfo.nativeLibraryDir, BINARY)
         if (!bin.exists()) {
@@ -266,6 +286,7 @@ object PsiphonEngine {
             }
             proc = started
             procUpstreamPort = upstreamPort
+            procRegion = region
             tunnelUp = false
             lastExitRegion = ""
 
@@ -403,6 +424,7 @@ object PsiphonEngine {
                     "psiphon: exit-country $region did not connect — retrying once with auto exit"
                 )
                 cfg.writeText(buildConfig(upstreamPort, dataRoot.absolutePath, ""))
+                procRegion = "" // the RUNNING config no longer carries the region
                 continue
             }
             stopInternal()
@@ -476,9 +498,10 @@ object PsiphonEngine {
     }
 
     /**
-     * Lazily registers the two auto-managed Psiphon candidates (the gool
-     * pattern): standalone and Kuku-chained. Both ride 127.0.0.1:[SOCKS_PORT]
-     * through a socks outbound; the transport name picks the wiring.
+     * Lazily registers the three auto-managed Psiphon candidates (the gool
+     * pattern): standalone, Kuku-chained, and the AI one (v1.7.4 — the same
+     * core with a hard US egress). All ride 127.0.0.1:[SOCKS_PORT] through a
+     * socks outbound; the transport name picks the wiring and the region.
      */
     suspend fun ensureProfiles(context: Context) = withContext(Dispatchers.IO) {
         val store = (context.applicationContext as KukuApp).profileStore
@@ -504,6 +527,19 @@ object PsiphonEngine {
                         host = "127.0.0.1",
                         port = SOCKS_PORT,
                         transport = TRANSPORT_CHAINED,
+                        fromSubscription = SOURCE,
+                    )
+                )
+            }
+            // v1.7.4: the AI method — same core, hard US egress (see TRANSPORT_AI)
+            if (TRANSPORT_AI !in have) {
+                add(
+                    Profile(
+                        name = context.getString(R.string.ai_profile_name),
+                        type = ProfileType.WIREGUARD,
+                        host = "127.0.0.1",
+                        port = SOCKS_PORT,
+                        transport = TRANSPORT_AI,
                         fromSubscription = SOURCE,
                     )
                 )
