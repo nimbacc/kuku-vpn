@@ -36,9 +36,9 @@ class KukuApp : Application() {
         // if the registration fails (e.g. offline first launch).
         appScope.launch {
             WarpRegistrar.ensureProfile(this@KukuApp)
-            // v1.7.4: the Psiphon candidates (incl. the AI one) register at app
-            // open too — the AI quick-connect card on Home must exist BEFORE the
-            // first Psiphon connect (they used to appear only after a connect)
+            // The Psiphon candidates register at app open (not first connect),
+            // and v1.7.5: the retired AI profile ("psiphon-ai", removed by user
+            // request) is purged from the store here on every launch
             runCatching { app.kukuvpn.core.psiphon.PsiphonEngine.ensureProfiles(this@KukuApp) }
             prewarmEngine()
         }

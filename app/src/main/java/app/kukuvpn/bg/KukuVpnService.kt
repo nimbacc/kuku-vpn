@@ -388,10 +388,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                     WgSidecar.stop()
                 }
                 try {
-                    // v1.7.4: the AI candidate forces the US egress — the regular
-                    // candidates keep whatever the Settings exit-country picker says
-                    val isAiCandidate = candidate.transport == PsiphonEngine.TRANSPORT_AI
-                    val region = if (isAiCandidate) PsiphonEngine.AI_EGRESS_REGION else settings.psiphonRegion
+                    val region = settings.psiphonRegion
                     PsiphonEngine.boot(
                         this,
                         upstreamPort = underlayPort,
@@ -408,7 +405,7 @@ class KukuVpnService : AndroidVpnService(), PlatformInterface {
                             underlayPort?.let { ", underlay socks $it" } ?: ""
                         }${
                             region.takeIf { it.isNotBlank() && it != "auto" }
-                                ?.let { ", egress $it${if (isAiCandidate) " (AI)" else ""}" } ?: ""
+                                ?.let { ", egress $it" } ?: ""
                         })"
                     )
                 } catch (e: Exception) {

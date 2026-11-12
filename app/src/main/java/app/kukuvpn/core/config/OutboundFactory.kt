@@ -31,7 +31,6 @@ object OutboundFactory {
                 profile.transport.startsWith("masque") ||
                     profile.transport == "psiphon" ||
                     profile.transport == "kuku-psiphon" ||
-                    profile.transport == "psiphon-ai" || // v1.7.4: the US-egress AI method rides the same child-process SOCKS
                     profile.transport == "tor" ||
                     profile.transport == "kuku-tor"
                 )

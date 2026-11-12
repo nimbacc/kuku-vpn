@@ -99,16 +99,9 @@ class FallbackEngine(private val store: ProfileStore) {
         // path) leads every smart ordering.
         when (protocol) {
             PROTO_PSIPHON -> {
-                // v1.7.4: the AI method leads when the user SELECTED it —
-                // the US-egress core is the point of the pick, and the regular
-                // auto-exit candidates stay behind it as the safety net
-                // (a hard US egress that cannot connect costs the REGION, not
-                // the protocol — the engine's own retry handles that).
-                val selectedP = selectedId?.let { id -> all.firstOrNull { it.id == id } }
-                val ai = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_AI_TRANSPORT }
                 val standalone = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_TRANSPORT }
                 val chained = all.filter { it.fromSubscription == PSIPHON_SOURCE && it.transport == PSIPHON_CHAIN_TRANSPORT }
-                val base = when (network) {
+                val ordered = when (network) {
                     NET_DIRECT -> standalone
                     // v1.7.3: a pinned wire LEADS, it no longer owns the
                     // protocol alone — the user's field log ("all 1 candidate
@@ -122,7 +115,6 @@ class FallbackEngine(private val store: ProfileStore) {
                     NET_MASQUE, NET_WG -> chained + standalone
                     else -> standalone + chained // smart: direct first, then the WARP chain
                 }
-                val ordered = if (selectedP?.transport == PSIPHON_AI_TRANSPORT) ai + base else base
                 return ordered.filterNot { it.id in failedIds }.take(maxCandidates)
             }
             PROTO_TOR -> {
@@ -229,8 +221,6 @@ class FallbackEngine(private val store: ProfileStore) {
         private const val PSIPHON_SOURCE = "psiphon"
         private const val PSIPHON_TRANSPORT = "psiphon"
         private const val PSIPHON_CHAIN_TRANSPORT = "kuku-psiphon"
-        // v1.7.4: the AI method's transport (US-egress Psiphon core)
-        private const val PSIPHON_AI_TRANSPORT = "psiphon-ai"
 
         // Tor backend markers (v1.6.0) — literals mirror TorEngine
         private const val TOR_SOURCE = "tor"

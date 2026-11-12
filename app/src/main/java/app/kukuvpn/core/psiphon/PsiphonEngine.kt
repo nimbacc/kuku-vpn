@@ -99,16 +99,10 @@ object PsiphonEngine {
     const val SOURCE = "psiphon"
     const val TRANSPORT_STANDALONE = "psiphon"
     const val TRANSPORT_CHAINED = "kuku-psiphon"
-    /**
-     * v1.7.4 — the AI method: the SAME bundled Psiphon core booted with a hard
-     * EgressRegion="US". Gemini/ChatGPT-class services reject Iranian and most
-     * non-US datacenter IPs, but the user reports plain Psiphon is the one
-     * method that reaches them — a US-pinned Psiphon keeps that property and
-     * makes the exit country deterministic when the network can provide it.
-     */
-    const val TRANSPORT_AI = "psiphon-ai"
-    /** The AI method's forced egress country. */
-    const val AI_EGRESS_REGION = "US"
+    // v1.7.5: the AI method ("psiphon-ai", a US-egress Psiphon core) was REMOVED
+    // by user request — it never connected on their ISP and its selection pin
+    // blocked the regular methods. Retired profiles are PURGED in ensureProfiles.
+    private const val RETIRED_AI_TRANSPORT = "psiphon-ai"
 
     private const val BINARY = "libpsiphon.so"
     // v1.6.0: raised from 90s — Psiphon's link-selection on a filtered Iranian
@@ -498,13 +492,17 @@ object PsiphonEngine {
     }
 
     /**
-     * Lazily registers the three auto-managed Psiphon candidates (the gool
-     * pattern): standalone, Kuku-chained, and the AI one (v1.7.4 — the same
-     * core with a hard US egress). All ride 127.0.0.1:[SOCKS_PORT] through a
-     * socks outbound; the transport name picks the wiring and the region.
+     * Registers the two auto-managed Psiphon candidates (the gool pattern):
+     * standalone and Kuku-chained. Both ride 127.0.0.1:[SOCKS_PORT] through a
+     * socks outbound; the transport name picks the wiring.
+     *
+     * v1.7.5: also PURGES the retired AI transport — a stale psiphon-ai
+     * profile left in the store by v1.7.4 would keep hijacking candidate
+     * orderings (removeMatching also moves the selection off it).
      */
     suspend fun ensureProfiles(context: Context) = withContext(Dispatchers.IO) {
         val store = (context.applicationContext as KukuApp).profileStore
+        store.removeMatching { it.transport == RETIRED_AI_TRANSPORT }
         val have = store.snapshot().map { it.transport }.toSet()
         val missing = buildList {
             if (TRANSPORT_STANDALONE !in have) {
@@ -527,19 +525,6 @@ object PsiphonEngine {
                         host = "127.0.0.1",
                         port = SOCKS_PORT,
                         transport = TRANSPORT_CHAINED,
-                        fromSubscription = SOURCE,
-                    )
-                )
-            }
-            // v1.7.4: the AI method — same core, hard US egress (see TRANSPORT_AI)
-            if (TRANSPORT_AI !in have) {
-                add(
-                    Profile(
-                        name = context.getString(R.string.ai_profile_name),
-                        type = ProfileType.WIREGUARD,
-                        host = "127.0.0.1",
-                        port = SOCKS_PORT,
-                        transport = TRANSPORT_AI,
                         fromSubscription = SOURCE,
                     )
                 )

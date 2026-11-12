@@ -34,8 +34,6 @@ import app.kukuvpn.R
 import app.kukuvpn.bg.ServiceBridge
 import app.kukuvpn.bg.TunnelStage
 import app.kukuvpn.bg.TunnelState
-import app.kukuvpn.core.fallback.FallbackEngine
-import app.kukuvpn.core.psiphon.PsiphonEngine
 import app.kukuvpn.core.speed.SpeedTester
 import app.kukuvpn.core.warp.WarpRegistrar
 import app.kukuvpn.core.warp.WarpSetup
@@ -48,8 +46,6 @@ import app.kukuvpn.ui.components.formatBytes
 import app.kukuvpn.ui.components.formatUptime
 import app.kukuvpn.ui.components.qualityColor
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.compose.runtime.rememberCoroutineScope
 
 @Composable
 fun HomeScreen() {
@@ -62,7 +58,6 @@ fun HomeScreen() {
     val exitIp by ServiceBridge.exitIp.collectAsState()
     val exitCountry by ServiceBridge.exitCountry.collectAsState()
     val activeProfile by ServiceBridge.activeProfile.collectAsState()
-    val scope = rememberCoroutineScope()
     val lastError by ServiceBridge.lastError.collectAsState()
     // v1.6.0 honesty banner: pinned Psiphon/Tor fell back to WARP
     val fallbackNote by ServiceBridge.fallbackNote.collectAsState()
@@ -215,49 +210,11 @@ fun HomeScreen() {
             qualityColor = speedVerdict?.let { qualityColor(it) } ?: MaterialTheme.colorScheme.outline,
         )
 
-        // v1.7.4: the AI section — the user's ask ("یه روش مخصوص آی پی آمریکا
-        // بعنوان بخش مخصوص هوش مصنوعی"). The speed-test row left Home for the
-        // Profiles screen (the user's call: test PER PROFILE, not the tunnel).
-        profiles.firstOrNull { it.transport == PsiphonEngine.TRANSPORT_AI }?.let { ai ->
-            androidx.compose.foundation.layout.Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.ai_home_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (selectedId == ai.id && state == TunnelState.ACTIVE) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        stringResource(R.string.ai_home_subtitle),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                androidx.compose.material3.TextButton(
-                    onClick = {
-                        scope.launch {
-                            // pin the AI profile: protocol=psiphon + direct (the
-                            // proven fast wiring), then connect like the main button
-                            app.profileStore.select(ai.id)
-                            app.settingsStore.setProtocol(FallbackEngine.PROTO_PSIPHON)
-                            app.settingsStore.setNetwork(FallbackEngine.NET_DIRECT)
-                            if (settings.vpnMode) {
-                                val intent = ServiceBridge.prepare(context)
-                                if (intent != null) vpnPermission.launch(intent)
-                                else ServiceBridge.connect(context)
-                            } else ServiceBridge.connect(context)
-                        }
-                    },
-                    enabled = state == TunnelState.OFF || state == TunnelState.ERROR,
-                ) {
-                    Text(stringResource(R.string.ai_home_connect))
-                }
-            }
-        }
+        // v1.7.5: the AI section was REMOVED by user request — the button never
+        // connected on their ISP, and its selection pin (it permanently pinned
+        // the psiphon-ai profile and overrode the Connection-page wiring) kept
+        // the regular methods from connecting. Stale AI profiles are purged in
+        // PsiphonEngine.ensureProfiles on app open.
 
         // v1.7.0: the VPN / proxy switch moved to Settings → "Device mode"
         // (with a plain-language explanation) — on Home it just confused.
